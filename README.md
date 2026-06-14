@@ -8,10 +8,10 @@ Exposes a `claude-cli/<model>` namespace so you can call the local Claude subscr
 
 ```bash
 # via uv
-uv add "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.0"
+uv add "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.1"
 
 # via pip
-pip install "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.0"
+pip install "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.1"
 ```
 
 **Requires:** Python 3.12+, `litellm>=1.88.1`, and the `claude` CLI installed and authenticated on PATH.
