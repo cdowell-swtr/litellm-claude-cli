@@ -5,7 +5,8 @@ Current state only — ordered `Next` (with deps) + recent `Done`. History and r
 repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 
 ## Next
-- [ ] LCC2 — Register litellm-claude-cli in the patterns implementer registries (PI/MEMORY/Git/Docs-layout); PR open, awaiting merge
+_(nothing queued)_
 
 ## Done
+- [x] LCC2 — Register litellm-claude-cli in the patterns implementer registries (PI/MEMORY/Git/Docs-layout) → log:#0004
 - [x] LCC1 — Adopt patterns conventions (PI, Committed Memory, Git, Docs-layout) → log:#0002

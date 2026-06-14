@@ -20,3 +20,7 @@ which clones the private patterns repo — Actions' GITHUB_TOKEN can't, so it er
 to the vendored `hooks/docs-layout-check.sh` and gitleaks to direct-binary install (matching the
 patterns reference workflow). Local pre-commit hooks unchanged. Gotcha recorded in committed
 memory ([[ci-docs-layout-vendored-script]]).
+
+#### #0004 · completed · LCC2 · 2026-06-14
+Registration PR (patterns#4) merged — litellm-claude-cli now recorded in all four implementer
+registries: PI (v2, prefix LCC), Committed Memory (v1), Git (v1), Docs-layout (v1).
