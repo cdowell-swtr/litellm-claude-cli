@@ -1,0 +1,21 @@
+[project]
+name = "litellm-claude-cli"
+version = "0.1.0"
+description = "A LiteLLM CustomLLM provider backed by the local `claude` CLI subscription."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["litellm>=1.88.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/litellm_claude_cli"]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.8", "mypy>=1.13"]
+
+[[tool.mypy.overrides]]
+module = ["litellm.*"]
+ignore_missing_imports = true
