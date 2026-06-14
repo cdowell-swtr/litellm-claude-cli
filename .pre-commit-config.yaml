@@ -1,0 +1,23 @@
+# Commit-boundary enforcement for the adopted patterns conventions:
+#   - gitleaks               → secret scanning (MEMORY + Git conventions)
+#   - conventional-pre-commit → Conventional Commits message format (Git convention)
+#   - docs-layout            → documentation layout validator (Docs-layout convention)
+# Install: pre-commit install   (wires pre-commit, pre-push, and commit-msg hooks)
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: https://github.com/cdowell-swtr/patterns
+    rev: docs-layout/v1
+    hooks:
+      - id: docs-layout

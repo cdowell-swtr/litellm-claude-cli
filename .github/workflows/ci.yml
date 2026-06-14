@@ -17,3 +17,23 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest -q
+
+  conventions:
+    # Backstop for the adopted patterns conventions (gitleaks + docs-layout).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          sudo install gitleaks /usr/local/bin/
+      - name: gitleaks (full-repo secret scan)
+        run: gitleaks dir . --no-banner --redact
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pre-commit
+      - name: docs-layout validator
+        run: pre-commit run docs-layout --all-files
