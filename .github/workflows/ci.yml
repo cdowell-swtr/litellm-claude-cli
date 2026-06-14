@@ -31,9 +31,5 @@ jobs:
           sudo install gitleaks /usr/local/bin/
       - name: gitleaks (full-repo secret scan)
         run: gitleaks dir . --no-banner --redact
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pre-commit
       - name: docs-layout validator
-        run: pre-commit run docs-layout --all-files
+        run: bash hooks/docs-layout-check.sh

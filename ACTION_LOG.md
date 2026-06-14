@@ -13,3 +13,10 @@ Git (v1), Docs-layout (v1). Vendored convention docs at root; scaffolded PI + ME
 wired AGENTS.md/CLAUDE.md pointers; wired pre-commit (gitleaks + conventional-pre-commit +
 docs-layout) and CI backstops. Operational reason: bring this consumer repo onto the shared
 engineering conventions.
+
+#### #0003 · note · 2026-06-14
+CI fix after PR #1's first run failed: the `conventions` job ran `pre-commit run docs-layout`,
+which clones the private patterns repo — Actions' GITHUB_TOKEN can't, so it errored. Switched CI
+to the vendored `hooks/docs-layout-check.sh` and gitleaks to direct-binary install (matching the
+patterns reference workflow). Local pre-commit hooks unchanged. Gotcha recorded in committed
+memory ([[ci-docs-layout-vendored-script]]).
