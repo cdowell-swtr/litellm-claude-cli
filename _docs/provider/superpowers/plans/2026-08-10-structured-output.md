@@ -277,57 +277,61 @@ The schema goes in argv and the CLI has no file-path option for it, so `MAX_ARG_
 Add to `tests/test_provider.py`:
 
 ```python
-def test_oversized_schema_raises_value_error() -> None:
-    """A schema whose encoding exceeds MAX_ARG_STRLEN raises ValueError before exec."""
-    # One property per key, padded, until the compact encoding blows past 128 KB.
-    big_schema = {
+def _oversized_schema() -> dict[str, Any]:
+    """A schema whose compact encoding exceeds MAX_ARG_STRLEN."""
+    schema = {
         "type": "object",
-        "properties": {f"k{i}": {"type": "string", "description": "d" * 200} for i in range(1000)},
+        "properties": {
+            f"k{i}": {"type": "string", "description": "d" * 200} for i in range(1000)
+        },
     }
-    assert len(json.dumps(big_schema, separators=(",", ":")).encode("utf-8")) > 131072
+    assert len(json.dumps(schema, separators=(",", ":")).encode("utf-8")) > 131072
+    return schema
 
-    def _runner(argv: list[str], *, input_text: str | None) -> str:  # pragma: no cover
+
+def test_encode_schema_arg_rejects_oversized() -> None:
+    """The guard names both the actual size and the ceiling."""
+    with pytest.raises(ValueError, match=r"131072"):
+        _encode_schema_arg(_oversized_schema())
+
+
+def test_oversized_schema_raises_before_subprocess() -> None:
+    """The guard fires before the runner is invoked — no temp file, no exec."""
+
+    def _runner(argv: list[str], *, input_text: str | None) -> str:
         raise AssertionError("runner must not be reached when the schema is oversized")
 
     llm = ClaudeCliLLM(runner=_runner)
-    with pytest.raises(ValueError, match="131072"):
+    with pytest.raises(ValueError):
         llm.completion(
             model="claude-cli/claude-haiku-4-5-20251001",
             messages=[{"role": "user", "content": "go"}],
             optional_params={
                 "response_format": {
                     "type": "json_schema",
-                    "json_schema": {"name": "v", "schema": big_schema},
+                    "json_schema": {"name": "v", "schema": _oversized_schema()},
                 }
             },
         )
 
 
-def test_oversized_schema_error_is_not_exhaustion_or_runtime() -> None:
-    """The size guard stays distinguishable from the other two failure kinds."""
-    big_schema = {
-        "type": "object",
-        "properties": {f"k{i}": {"type": "string", "description": "d" * 200} for i in range(1000)},
-    }
-    with pytest.raises(ValueError) as exc_info:
-        _encode_schema_arg(big_schema)
-    assert not isinstance(exc_info.value, ClaudeExhausted)
-    # RuntimeError is the malformed-output signal; ValueError must not be one.
-    assert not isinstance(exc_info.value, RuntimeError)
-
-
 def test_schema_just_under_ceiling_is_accepted() -> None:
-    """A schema at the boundary is encoded rather than rejected."""
+    """A schema below the ceiling is encoded rather than rejected."""
     encoded = _encode_schema_arg({"type": "object", "title": "x" * 1000})
     assert len(encoded.encode("utf-8")) <= 131072
     assert encoded.startswith('{"type":"object"')
 ```
 
+> Note for the implementer: `ValueError` is neither a `ClaudeExhausted` nor a `RuntimeError`
+> by Python's own class hierarchy, so `pytest.raises(ValueError)` is the complete pin on the
+> spec §7 taxonomy. Do not add `assert not isinstance(exc, RuntimeError)` — it asserts a
+> language fact, not a property of this code.
+
 Add `_encode_schema_arg` to the import block in `tests/test_provider.py`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `.venv/bin/python -m pytest tests/test_provider.py -k "oversized or ceiling" -v`
+Run: `.venv/bin/python -m pytest tests/test_provider.py -k "oversized or ceiling or encode_schema" -v`
 
 Expected: FAIL — `ImportError: cannot import name '_encode_schema_arg'`.
 
