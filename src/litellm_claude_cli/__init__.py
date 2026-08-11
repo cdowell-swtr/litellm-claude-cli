@@ -271,7 +271,10 @@ def _build_response(raw: str) -> ModelResponse:
         raise RuntimeError(f"claude -p error: {payload.get('result')}")
 
     text = (payload.get("result", "") or "").strip()
-    stop_reason = payload.get("stop_reason") or "stop"
+    raw_stop_reason = payload.get("stop_reason") or "stop"
+    # A null structured_output is treated exactly as an absent one: the documented
+    # contract is that the attribute is absent, never present-and-None.
+    structured = payload.get("structured_output")
     u = payload.get("usage", {}) or {}
 
     cache_read = u.get("cache_read_input_tokens", 0) or 0
@@ -287,15 +290,28 @@ def _build_response(raw: str) -> ModelResponse:
         cache_creation_input_tokens=cache_creation,
     )
 
+    # The CLI's own stop_reason is surfaced unconditionally — it is a pass-through of
+    # what the CLI reported, and making it conditional would mean the case most worth
+    # inspecting is the one that looks different.
+    provider_specific_fields: dict[str, Any] = {"stop_reason": raw_stop_reason}
+    if structured is not None:
+        provider_specific_fields["structured_output"] = structured
+
     mr = ModelResponse(
         choices=[
             {
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": stop_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                    "provider_specific_fields": provider_specific_fields,
+                },
+                "finish_reason": raw_stop_reason,
             }
         ]
     )
     mr.usage = usage  # type: ignore[attr-defined]
+    if structured is not None:
+        mr.structured_output = structured  # type: ignore[attr-defined]
     return mr
 
 
@@ -396,6 +412,9 @@ class ClaudeCliLLM(CustomLLM):
         if pre_made_response is not None:
             pre_made_response.choices = result.choices
             pre_made_response.usage = result.usage  # type: ignore[attr-defined]
+            structured = getattr(result, "structured_output", None)
+            if structured is not None:
+                pre_made_response.structured_output = structured  # type: ignore[attr-defined]
             return pre_made_response
 
         return result

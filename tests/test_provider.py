@@ -29,6 +29,9 @@ from litellm_claude_cli import (
 # ---------------------------------------------------------------------------
 
 
+_MISSING = object()
+
+
 def _fake_json_response(
     result: str = "[]",
     input_tokens: int = 10,
@@ -36,20 +39,22 @@ def _fake_json_response(
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
     stop_reason: str = "end_turn",
+    structured_output: Any = _MISSING,
 ) -> str:
-    return json.dumps(
-        {
-            "is_error": False,
-            "result": result,
-            "stop_reason": stop_reason,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": cache_read_input_tokens,
-                "cache_creation_input_tokens": cache_creation_input_tokens,
-            },
-        }
-    )
+    payload: dict[str, Any] = {
+        "is_error": False,
+        "result": result,
+        "stop_reason": stop_reason,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+        },
+    }
+    if structured_output is not _MISSING:
+        payload["structured_output"] = structured_output
+    return json.dumps(payload)
 
 
 def _make_llm_with_response(raw_response: str) -> tuple[ClaudeCliLLM, dict[str, Any]]:
@@ -538,3 +543,93 @@ def test_extract_json_schema_shapes() -> None:
         )
         is None
     )
+
+
+def test_structured_output_surfaced_on_response() -> None:
+    """The CLI's parsed object lands on ModelResponse.structured_output."""
+    obj = {"a": "x", "n": 3}
+    raw = _fake_json_response(
+        result='{"a":"x","n":3}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert resp.structured_output == obj
+    # The JSON string stays in content so a caller's fallback stays honest.
+    assert resp.choices[0].message.content == '{"a":"x","n":3}'
+
+
+def test_structured_output_absent_when_cli_omits_it() -> None:
+    """No structured_output key means the attribute is absent, not None."""
+    llm, _ = _make_llm_with_response(_fake_json_response(result="plain text"))
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert not hasattr(resp, "structured_output"), (
+        "attribute must be absent so getattr(resp, 'structured_output', None) is meaningful"
+    )
+    assert resp.choices[0].message.content == "plain text"
+
+
+def test_structured_output_null_treated_as_absent() -> None:
+    """A null structured_output must not surface as present-and-None."""
+    llm, _ = _make_llm_with_response(
+        _fake_json_response(result="plain text", structured_output=None)
+    )
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert not hasattr(resp, "structured_output")
+
+
+def test_provider_specific_fields_carry_object_and_raw_stop_reason() -> None:
+    """provider_specific_fields carries the parsed object and the CLI's raw stop_reason."""
+    obj = {"a": "x"}
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    psf = resp.choices[0].message.provider_specific_fields
+    assert psf["structured_output"] == obj
+    assert psf["stop_reason"] == "tool_use"
+
+
+def test_raw_stop_reason_surfaced_unconditionally() -> None:
+    """The raw stop_reason is surfaced even on a plain, unstructured call."""
+    llm, _ = _make_llm_with_response(_fake_json_response(stop_reason="end_turn"))
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "end_turn"
+
+
+def test_structured_output_survives_pre_made_model_response() -> None:
+    """litellm supplies its own ModelResponse; the attribute must land on THAT object."""
+    obj = {"a": "x"}
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    premade = litellm.ModelResponse()
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+        model_response=premade,
+    )
+    assert resp is premade
+    assert resp.structured_output == obj
