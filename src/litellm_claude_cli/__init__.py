@@ -87,6 +87,32 @@ def _exhaustion_error(text: str) -> ClaudeExhausted | None:
     return ClaudeExhausted(msg, reset_hint=hint)
 
 
+def _extract_json_schema(
+    optional_params: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the JSON Schema from an OpenAI-shaped ``response_format``, else ``None``.
+
+    Handles ``{"type": "json_schema", "json_schema": {"schema": {...}}}``.  LiteLLM
+    normalises a Pydantic ``response_format`` into exactly this shape before the
+    provider sees it, so one shape covers both call styles.
+
+    ``{"type": "json_object"}`` carries no schema, so there is nothing to pass to the
+    CLI; it yields ``None`` rather than raising.
+    """
+    if not isinstance(optional_params, dict):
+        return None
+    response_format = optional_params.get("response_format")
+    if not isinstance(response_format, dict):
+        return None
+    if response_format.get("type") != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    return schema if isinstance(schema, dict) else None
+
+
 class _Runner(Protocol):
     """Protocol for the subprocess runner so mypy can type-check keyword-only ``input_text``."""
 
@@ -275,23 +301,38 @@ class ClaudeCliLLM(CustomLLM):
     def completion(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: D102
         model = kwargs.get("model") or (args[0] if args else "")
         messages = kwargs.get("messages") or (args[1] if len(args) > 1 else [])
-        return self._run(model, messages, kwargs.get("model_response"))
+        return self._run(
+            model,
+            messages,
+            kwargs.get("model_response"),
+            kwargs.get("optional_params"),
+        )
 
     async def acompletion(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: D102
         model = kwargs.get("model") or (args[0] if args else "")
         messages = kwargs.get("messages") or (args[1] if len(args) > 1 else [])
-        return self._run(model, messages, kwargs.get("model_response"))
+        return self._run(
+            model,
+            messages,
+            kwargs.get("model_response"),
+            kwargs.get("optional_params"),
+        )
 
     def _run(
         self,
         model: str,
         messages: list[dict[str, Any]],
         pre_made_response: ModelResponse | None = None,
+        optional_params: dict[str, Any] | None = None,
     ) -> ModelResponse:
         # Strip provider prefix defensively (litellm auto-strips, but be safe).
         bare_model = model.removeprefix("claude-cli/")
 
         system_text, user_prompt = _render_messages_to_prompt(messages)
+        schema = _extract_json_schema(optional_params)
+        schema_arg = (
+            json.dumps(schema, separators=(",", ":")) if schema is not None else None
+        )
 
         # Write system content to a temp file (mode 0o600) so it never appears
         # as an argv element.  Linux's MAX_ARG_STRLEN (~128 KB) rejects large
@@ -313,6 +354,8 @@ class ClaudeCliLLM(CustomLLM):
                 "--model",
                 bare_model,
             ]
+            if schema_arg is not None:
+                argv += ["--json-schema", schema_arg]
             for t in _DISABLED_TOOLS:
                 argv += ["--disallowed-tools", t]
 

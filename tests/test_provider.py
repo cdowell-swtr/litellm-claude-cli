@@ -17,6 +17,7 @@ from litellm_claude_cli import (
     ClaudeExhausted,
     _build_response,
     _exhaustion_error,
+    _extract_json_schema,
     _render_messages_to_prompt,
     register,
 )
@@ -401,3 +402,93 @@ def test_register_replaces_existing_claude_cli_entry() -> None:
         assert entries[0]["custom_handler"] is not old_handler
     finally:
         litellm.custom_provider_map = saved
+
+
+def test_json_schema_reaches_argv() -> None:
+    """response_format json_schema is passed as --json-schema <compact JSON>."""
+    captured: dict[str, Any] = {}
+
+    def _runner(argv: list[str], *, input_text: str | None) -> str:
+        captured["argv"] = argv
+        idx = argv.index("--system-prompt-file") + 1
+        with open(argv[idx]) as fh:
+            fh.read()
+        return _fake_json_response()
+
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+    }
+    llm = ClaudeCliLLM(runner=_runner)
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": schema},
+            }
+        },
+    )
+
+    argv = captured["argv"]
+    assert "--json-schema" in argv, f"--json-schema missing from argv: {argv}"
+    # The encoding must be compact and must immediately follow the flag.
+    assert argv[argv.index("--json-schema") + 1] == json.dumps(
+        schema, separators=(",", ":")
+    )
+    # Load-bearing invariants survive the structured path.
+    assert "--system-prompt-file" in argv
+    assert "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--disallowed-tools" in argv
+    assert "--bare" not in argv
+
+
+def test_no_json_schema_flag_without_response_format() -> None:
+    """Absent response_format means no --json-schema in argv."""
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert "--json-schema" not in captured["argv"]
+
+
+def test_json_object_response_format_passes_no_schema() -> None:
+    """response_format {"type": "json_object"} carries no schema, so nothing is passed."""
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={"response_format": {"type": "json_object"}},
+    )
+    assert "--json-schema" not in captured["argv"]
+
+
+def test_extract_json_schema_shapes() -> None:
+    """_extract_json_schema returns the inner schema, or None for anything else."""
+    schema = {"type": "object"}
+    assert (
+        _extract_json_schema(
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"schema": schema},
+                }
+            }
+        )
+        == schema
+    )
+    assert _extract_json_schema(None) is None
+    assert _extract_json_schema({}) is None
+    assert _extract_json_schema({"response_format": {"type": "json_object"}}) is None
+    assert _extract_json_schema({"response_format": "nonsense"}) is None
+    assert _extract_json_schema({"response_format": {"type": "json_schema"}}) is None
+    assert (
+        _extract_json_schema(
+            {"response_format": {"type": "json_schema", "json_schema": {}}}
+        )
+        is None
+    )
