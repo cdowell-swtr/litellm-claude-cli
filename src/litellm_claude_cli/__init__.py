@@ -49,6 +49,11 @@ _EXHAUSTION_MARKERS = (
 
 _EXHAUSTION_MESSAGE = "claude subscription usage limit reached"
 
+# Linux caps a single argv element at MAX_ARG_STRLEN (128 KB).  The system prompt
+# dodges this via --system-prompt-file, but the CLI accepts a JSON Schema ONLY as an
+# inline argument, so a large schema is a reachable failure with no file fallback.
+_MAX_ARG_STRLEN = 131072
+
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -111,6 +116,26 @@ def _extract_json_schema(
         return None
     schema = json_schema.get("schema")
     return schema if isinstance(schema, dict) else None
+
+
+def _encode_schema_arg(schema: dict[str, Any]) -> str:
+    """Compactly encode *schema* for ``--json-schema``, refusing oversized input.
+
+    Raises:
+        ValueError: if the encoding exceeds :data:`_MAX_ARG_STRLEN`.  Deliberately
+            neither :class:`ClaudeExhausted` nor :class:`RuntimeError` — callers route
+            exhaustion, malformed output and caller error differently.
+    """
+    encoded = json.dumps(schema, separators=(",", ":"))
+    size = len(encoded.encode("utf-8"))
+    if size > _MAX_ARG_STRLEN:
+        raise ValueError(
+            f"JSON Schema is too large to pass to `claude --json-schema`: "
+            f"{size} bytes exceeds the {_MAX_ARG_STRLEN}-byte MAX_ARG_STRLEN ceiling. "
+            f"The CLI accepts the schema only as an inline argument, so there is no "
+            f"file-based fallback — reduce the schema."
+        )
+    return encoded
 
 
 class _Runner(Protocol):
@@ -330,9 +355,8 @@ class ClaudeCliLLM(CustomLLM):
 
         system_text, user_prompt = _render_messages_to_prompt(messages)
         schema = _extract_json_schema(optional_params)
-        schema_arg = (
-            json.dumps(schema, separators=(",", ":")) if schema is not None else None
-        )
+        # Encode before the temp file is created so an oversized schema cannot leak one.
+        schema_arg = _encode_schema_arg(schema) if schema is not None else None
 
         # Write system content to a temp file (mode 0o600) so it never appears
         # as an argv element.  Linux's MAX_ARG_STRLEN (~128 KB) rejects large

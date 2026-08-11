@@ -16,6 +16,7 @@ from litellm_claude_cli import (
     ClaudeCliLLM,
     ClaudeExhausted,
     _build_response,
+    _encode_schema_arg,
     _exhaustion_error,
     _extract_json_schema,
     _render_messages_to_prompt,
@@ -465,6 +466,51 @@ def test_json_object_response_format_passes_no_schema() -> None:
         optional_params={"response_format": {"type": "json_object"}},
     )
     assert "--json-schema" not in captured["argv"]
+
+
+def _oversized_schema() -> dict[str, Any]:
+    """A schema whose compact encoding exceeds MAX_ARG_STRLEN."""
+    schema = {
+        "type": "object",
+        "properties": {
+            f"k{i}": {"type": "string", "description": "d" * 200} for i in range(1000)
+        },
+    }
+    assert len(json.dumps(schema, separators=(",", ":")).encode("utf-8")) > 131072
+    return schema
+
+
+def test_encode_schema_arg_rejects_oversized() -> None:
+    """The guard names both the actual size and the ceiling."""
+    with pytest.raises(ValueError, match=r"131072"):
+        _encode_schema_arg(_oversized_schema())
+
+
+def test_oversized_schema_raises_before_subprocess() -> None:
+    """The guard fires before the runner is invoked — no temp file, no exec."""
+
+    def _runner(argv: list[str], *, input_text: str | None) -> str:
+        raise AssertionError("runner must not be reached when the schema is oversized")
+
+    llm = ClaudeCliLLM(runner=_runner)
+    with pytest.raises(ValueError):
+        llm.completion(
+            model="claude-cli/claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": "go"}],
+            optional_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "v", "schema": _oversized_schema()},
+                }
+            },
+        )
+
+
+def test_schema_just_under_ceiling_is_accepted() -> None:
+    """A schema below the ceiling is encoded rather than rejected."""
+    encoded = _encode_schema_arg({"type": "object", "title": "x" * 1000})
+    assert len(encoded.encode("utf-8")) <= 131072
+    assert encoded.startswith('{"type":"object"')
 
 
 def test_extract_json_schema_shapes() -> None:
