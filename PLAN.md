@@ -8,5 +8,6 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 _(nothing queued)_
 
 ## Done
+- [x] LCC3 — Structured output via `--json-schema` + `structured_output` on the response → log:#0006
 - [x] LCC2 — Register litellm-claude-cli in the patterns implementer registries (PI/MEMORY/Git/Docs-layout) → log:#0004
 - [x] LCC1 — Adopt patterns conventions (PI, Committed Memory, Git, Docs-layout) → log:#0002
