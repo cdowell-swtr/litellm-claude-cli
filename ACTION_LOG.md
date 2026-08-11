@@ -24,3 +24,28 @@ memory ([[ci-docs-layout-vendored-script]]).
 #### #0004 · completed · LCC2 · 2026-06-14
 Registration PR (patterns#4) merged — litellm-claude-cli now recorded in all four implementer
 registries: PI (v2, prefix LCC), Committed Memory (v1), Git (v1), Docs-layout (v1).
+
+#### #0005 · inserted · LCC3 · 2026-08-10
+Structured output through the provider, for the jsp scoring worker. Design spec at
+`_docs/provider/superpowers/specs/2026-08-10-structured-output-design.md`, plan at
+`_docs/provider/superpowers/plans/2026-08-10-structured-output.md`. Operational reason:
+jsp needs schema-constrained JSON per scored criterion on the subscription, not metered API.
+
+#### #0006 · completed · LCC3 · 2026-08-10
+Shipped 0.2.0: `response_format` json_schema forwarded as `--json-schema`, CLI
+`structured_output` surfaced on the `ModelResponse` under that name, `tool_use` mapped to
+`stop` on the structured path only, and a `ValueError` guard on the MAX_ARG_STRLEN ceiling
+the inline schema reintroduces. Deviation from the brief's suggestion: none needed —
+`response_format` was verified to reach `CustomLLM` kwargs untransformed, so no bespoke
+kwarg. Limitation pinned by test: `anthropic_messages()` drops the attribute.
+
+#### #0007 · amended · LCC3 · 2026-08-11
+Whole-branch review found the release notes asserted an error-taxonomy guarantee the recommended
+call path does not deliver: `litellm.completion()` wraps every provider exception in
+`APIConnectionError`, so `ClaudeExhausted` / `RuntimeError` / `ValueError` are recoverable only via
+`exc.__context__` (`__cause__` is `None`). Pre-existing runtime behaviour, newly mis-described —
+CHANGELOG and README corrected and the wrapping pinned by test. Also: `>` → `>=` at the argv
+ceiling (Linux counts the NUL terminator, so exactly 131072 bytes was the first *rejected* length,
+not the last accepted one), plus tests pinning the `pre_made_response` copy path and
+`_DISABLED_TOOLS` exhaustiveness. Operational reason: the `v0.2.0` tag was retagged onto the
+amended head, so the release a consumer installs contains these corrections.

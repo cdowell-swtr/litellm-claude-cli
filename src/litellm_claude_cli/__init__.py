@@ -49,6 +49,11 @@ _EXHAUSTION_MARKERS = (
 
 _EXHAUSTION_MESSAGE = "claude subscription usage limit reached"
 
+# Linux caps a single argv element at MAX_ARG_STRLEN (128 KB).  The system prompt
+# dodges this via --system-prompt-file, but the CLI accepts a JSON Schema ONLY as an
+# inline argument, so a large schema is a reachable failure with no file fallback.
+_MAX_ARG_STRLEN = 131072
+
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -85,6 +90,53 @@ def _exhaustion_error(text: str) -> ClaudeExhausted | None:
     hint = m.group(0).strip().rstrip(".") if m else None
     msg = _EXHAUSTION_MESSAGE + (f" — {hint}" if hint else "")
     return ClaudeExhausted(msg, reset_hint=hint)
+
+
+def _extract_json_schema(
+    optional_params: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return the JSON Schema from an OpenAI-shaped ``response_format``, else ``None``.
+
+    Handles ``{"type": "json_schema", "json_schema": {"schema": {...}}}``.  LiteLLM
+    normalises a Pydantic ``response_format`` into exactly this shape before the
+    provider sees it, so one shape covers both call styles.
+
+    ``{"type": "json_object"}`` carries no schema, so there is nothing to pass to the
+    CLI; it yields ``None`` rather than raising.
+    """
+    if not isinstance(optional_params, dict):
+        return None
+    response_format = optional_params.get("response_format")
+    if not isinstance(response_format, dict):
+        return None
+    if response_format.get("type") != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    return schema if isinstance(schema, dict) else None
+
+
+def _encode_schema_arg(schema: dict[str, Any]) -> str:
+    """Compactly encode *schema* for ``--json-schema``, refusing oversized input.
+
+    Raises:
+        ValueError: if the encoding reaches or exceeds :data:`_MAX_ARG_STRLEN`.
+            Deliberately neither :class:`ClaudeExhausted` nor :class:`RuntimeError`
+            — callers route exhaustion, malformed output and caller error differently.
+    """
+    encoded = json.dumps(schema, separators=(",", ":"))
+    size = len(encoded.encode("utf-8"))
+    if size >= _MAX_ARG_STRLEN:
+        raise ValueError(
+            f"JSON Schema is too large to pass to `claude --json-schema`: "
+            f"{size} bytes reaches the {_MAX_ARG_STRLEN}-byte MAX_ARG_STRLEN ceiling "
+            f"(Linux's own check counts the NUL terminator, so this length is already "
+            f"the first rejected one). The CLI accepts the schema only as an inline "
+            f"argument, so there is no file-based fallback — reduce the schema."
+        )
+    return encoded
 
 
 class _Runner(Protocol):
@@ -192,8 +244,13 @@ def _render_messages_to_prompt(
     return system_text, user_prompt_text
 
 
-def _build_response(raw: str) -> ModelResponse:
+def _build_response(raw: str, *, schema_requested: bool = False) -> ModelResponse:
     """Parse the JSON output from ``claude -p`` into a :class:`ModelResponse`.
+
+    Args:
+        raw: the CLI's ``--output-format json`` payload.
+        schema_requested: whether this call carried ``--json-schema``.  Gates the
+            ``finish_reason`` normalisation below.
 
     Raises:
         RuntimeError: if *raw* is not valid JSON, not a dict, or signals an
@@ -220,7 +277,10 @@ def _build_response(raw: str) -> ModelResponse:
         raise RuntimeError(f"claude -p error: {payload.get('result')}")
 
     text = (payload.get("result", "") or "").strip()
-    stop_reason = payload.get("stop_reason") or "stop"
+    raw_stop_reason = payload.get("stop_reason") or "stop"
+    # A null structured_output is treated exactly as an absent one: the documented
+    # contract is that the attribute is absent, never present-and-None.
+    structured = payload.get("structured_output")
     u = payload.get("usage", {}) or {}
 
     cache_read = u.get("cache_read_input_tokens", 0) or 0
@@ -236,15 +296,43 @@ def _build_response(raw: str) -> ModelResponse:
         cache_creation_input_tokens=cache_creation,
     )
 
+    # `finish_reason` is a normalised interface field, not a provider passthrough.
+    # `tool_calls` means "the caller must execute something and continue the loop",
+    # and there is nothing here to execute: the tool call is only how the CLI
+    # implements structured output, and no tool_calls array is exposed.  Left alone,
+    # litellm maps the CLI's `tool_use` to `tool_calls` and a tool-runner loop either
+    # errors on the missing array or spins.
+    #
+    # SOUNDNESS: this holds ONLY because _DISABLED_TOOLS disables every tool, so within
+    # this provider `tool_use` has exactly one possible cause — the forced tool call
+    # implementing structured output.  If the tool-disable list is ever relaxed, this
+    # mapping stops being sound and must be revisited.
+    finish_reason = raw_stop_reason
+    if schema_requested and raw_stop_reason == "tool_use":
+        finish_reason = "stop"
+
+    # The CLI's own stop_reason is surfaced unconditionally — it is a pass-through of
+    # what the CLI reported, and making it conditional would mean the case most worth
+    # inspecting is the one that looks different.
+    provider_specific_fields: dict[str, Any] = {"stop_reason": raw_stop_reason}
+    if structured is not None:
+        provider_specific_fields["structured_output"] = structured
+
     mr = ModelResponse(
         choices=[
             {
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": stop_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": text,
+                    "provider_specific_fields": provider_specific_fields,
+                },
+                "finish_reason": finish_reason,
             }
         ]
     )
     mr.usage = usage  # type: ignore[attr-defined]
+    if structured is not None:
+        mr.structured_output = structured  # type: ignore[attr-defined]
     return mr
 
 
@@ -275,23 +363,37 @@ class ClaudeCliLLM(CustomLLM):
     def completion(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: D102
         model = kwargs.get("model") or (args[0] if args else "")
         messages = kwargs.get("messages") or (args[1] if len(args) > 1 else [])
-        return self._run(model, messages, kwargs.get("model_response"))
+        return self._run(
+            model,
+            messages,
+            kwargs.get("model_response"),
+            kwargs.get("optional_params"),
+        )
 
     async def acompletion(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: D102
         model = kwargs.get("model") or (args[0] if args else "")
         messages = kwargs.get("messages") or (args[1] if len(args) > 1 else [])
-        return self._run(model, messages, kwargs.get("model_response"))
+        return self._run(
+            model,
+            messages,
+            kwargs.get("model_response"),
+            kwargs.get("optional_params"),
+        )
 
     def _run(
         self,
         model: str,
         messages: list[dict[str, Any]],
         pre_made_response: ModelResponse | None = None,
+        optional_params: dict[str, Any] | None = None,
     ) -> ModelResponse:
         # Strip provider prefix defensively (litellm auto-strips, but be safe).
         bare_model = model.removeprefix("claude-cli/")
 
         system_text, user_prompt = _render_messages_to_prompt(messages)
+        schema = _extract_json_schema(optional_params)
+        # Encode before the temp file is created so an oversized schema cannot leak one.
+        schema_arg = _encode_schema_arg(schema) if schema is not None else None
 
         # Write system content to a temp file (mode 0o600) so it never appears
         # as an argv element.  Linux's MAX_ARG_STRLEN (~128 KB) rejects large
@@ -313,6 +415,8 @@ class ClaudeCliLLM(CustomLLM):
                 "--model",
                 bare_model,
             ]
+            if schema_arg is not None:
+                argv += ["--json-schema", schema_arg]
             for t in _DISABLED_TOOLS:
                 argv += ["--disallowed-tools", t]
 
@@ -323,12 +427,15 @@ class ClaudeCliLLM(CustomLLM):
             except OSError:
                 pass
 
-        result = _build_response(raw)
+        result = _build_response(raw, schema_requested=schema_arg is not None)
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:
             pre_made_response.choices = result.choices
             pre_made_response.usage = result.usage  # type: ignore[attr-defined]
+            structured = getattr(result, "structured_output", None)
+            if structured is not None:
+                pre_made_response.structured_output = structured  # type: ignore[attr-defined]
             return pre_made_response
 
         return result

@@ -15,8 +15,11 @@ import pytest
 from litellm_claude_cli import (
     ClaudeCliLLM,
     ClaudeExhausted,
+    _DISABLED_TOOLS,
     _build_response,
+    _encode_schema_arg,
     _exhaustion_error,
+    _extract_json_schema,
     _render_messages_to_prompt,
     register,
 )
@@ -27,6 +30,9 @@ from litellm_claude_cli import (
 # ---------------------------------------------------------------------------
 
 
+_MISSING = object()
+
+
 def _fake_json_response(
     result: str = "[]",
     input_tokens: int = 10,
@@ -34,20 +40,22 @@ def _fake_json_response(
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
     stop_reason: str = "end_turn",
+    structured_output: Any = _MISSING,
 ) -> str:
-    return json.dumps(
-        {
-            "is_error": False,
-            "result": result,
-            "stop_reason": stop_reason,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": cache_read_input_tokens,
-                "cache_creation_input_tokens": cache_creation_input_tokens,
-            },
-        }
-    )
+    payload: dict[str, Any] = {
+        "is_error": False,
+        "result": result,
+        "stop_reason": stop_reason,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+        },
+    }
+    if structured_output is not _MISSING:
+        payload["structured_output"] = structured_output
+    return json.dumps(payload)
 
 
 def _make_llm_with_response(raw_response: str) -> tuple[ClaudeCliLLM, dict[str, Any]]:
@@ -401,3 +409,355 @@ def test_register_replaces_existing_claude_cli_entry() -> None:
         assert entries[0]["custom_handler"] is not old_handler
     finally:
         litellm.custom_provider_map = saved
+
+
+def test_json_schema_reaches_argv() -> None:
+    """response_format json_schema is passed as --json-schema <compact JSON>."""
+    captured: dict[str, Any] = {}
+
+    def _runner(argv: list[str], *, input_text: str | None) -> str:
+        captured["argv"] = argv
+        idx = argv.index("--system-prompt-file") + 1
+        with open(argv[idx]) as fh:
+            fh.read()
+        return _fake_json_response()
+
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+    }
+    llm = ClaudeCliLLM(runner=_runner)
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": schema},
+            }
+        },
+    )
+
+    argv = captured["argv"]
+    assert "--json-schema" in argv, f"--json-schema missing from argv: {argv}"
+    # The encoding must be compact and must immediately follow the flag.
+    assert argv[argv.index("--json-schema") + 1] == json.dumps(
+        schema, separators=(",", ":")
+    )
+    # Load-bearing invariants survive the structured path.
+    assert "--system-prompt-file" in argv
+    assert "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--disallowed-tools" in argv
+    assert "--bare" not in argv
+
+
+def test_no_json_schema_flag_without_response_format() -> None:
+    """Absent response_format means no --json-schema in argv."""
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert "--json-schema" not in captured["argv"]
+
+
+def test_json_object_response_format_passes_no_schema() -> None:
+    """response_format {"type": "json_object"} carries no schema, so nothing is passed."""
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={"response_format": {"type": "json_object"}},
+    )
+    assert "--json-schema" not in captured["argv"]
+
+
+def _oversized_schema() -> dict[str, Any]:
+    """A schema whose compact encoding exceeds MAX_ARG_STRLEN."""
+    schema = {
+        "type": "object",
+        "properties": {
+            f"k{i}": {"type": "string", "description": "d" * 200} for i in range(1000)
+        },
+    }
+    assert len(json.dumps(schema, separators=(",", ":")).encode("utf-8")) > 131072
+    return schema
+
+
+def test_encode_schema_arg_rejects_oversized() -> None:
+    """The guard names both the actual size and the ceiling."""
+    with pytest.raises(ValueError, match=r"131072"):
+        _encode_schema_arg(_oversized_schema())
+
+
+def test_oversized_schema_raises_before_subprocess() -> None:
+    """The guard fires before the runner is invoked — no temp file, no exec."""
+
+    def _runner(argv: list[str], *, input_text: str | None) -> str:
+        raise AssertionError("runner must not be reached when the schema is oversized")
+
+    llm = ClaudeCliLLM(runner=_runner)
+    with pytest.raises(ValueError):
+        llm.completion(
+            model="claude-cli/claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": "go"}],
+            optional_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "v", "schema": _oversized_schema()},
+                }
+            },
+        )
+
+
+def test_schema_just_under_ceiling_is_accepted() -> None:
+    """A schema below the ceiling is encoded rather than rejected."""
+    encoded = _encode_schema_arg({"type": "object", "title": "x" * 1000})
+    assert len(encoded.encode("utf-8")) < 131072
+    assert encoded.startswith('{"type":"object"')
+
+
+def test_schema_encoding_exactly_at_ceiling_is_rejected() -> None:
+    """131072 bytes is the first REJECTED length, not the last accepted one.
+
+    Linux's own MAX_ARG_STRLEN check counts the NUL terminator, so an argv element
+    of exactly 131072 content bytes is already too long. Pad `title` so the compact
+    encoding lands on exactly 131072 bytes, confirm that before asserting the guard
+    fires on it.
+    """
+    # Overhead of `{"type":"object","title":""}` is 28 bytes; pad title to make the
+    # total exactly 131072 bytes.
+    schema = {"type": "object", "title": "x" * (131072 - 28)}
+    encoded = json.dumps(schema, separators=(",", ":"))
+    assert len(encoded.encode("utf-8")) == 131072
+    with pytest.raises(ValueError, match=r"131072"):
+        _encode_schema_arg(schema)
+
+
+def test_extract_json_schema_shapes() -> None:
+    """_extract_json_schema returns the inner schema, or None for anything else."""
+    schema = {"type": "object"}
+    assert (
+        _extract_json_schema(
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"schema": schema},
+                }
+            }
+        )
+        == schema
+    )
+    assert _extract_json_schema(None) is None
+    assert _extract_json_schema({}) is None
+    assert _extract_json_schema({"response_format": {"type": "json_object"}}) is None
+    assert _extract_json_schema({"response_format": "nonsense"}) is None
+    assert _extract_json_schema({"response_format": {"type": "json_schema"}}) is None
+    assert (
+        _extract_json_schema(
+            {"response_format": {"type": "json_schema", "json_schema": {}}}
+        )
+        is None
+    )
+
+
+def test_structured_output_surfaced_on_response() -> None:
+    """The CLI's parsed object lands on ModelResponse.structured_output."""
+    obj = {"a": "x", "n": 3}
+    raw = _fake_json_response(
+        result='{"a":"x","n":3}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert resp.structured_output == obj
+    # The JSON string stays in content so a caller's fallback stays honest.
+    assert resp.choices[0].message.content == '{"a":"x","n":3}'
+
+
+def test_structured_output_absent_when_cli_omits_it() -> None:
+    """No structured_output key means the attribute is absent, not None."""
+    llm, _ = _make_llm_with_response(_fake_json_response(result="plain text"))
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert not hasattr(resp, "structured_output"), (
+        "attribute must be absent so getattr(resp, 'structured_output', None) is meaningful"
+    )
+    assert resp.choices[0].message.content == "plain text"
+
+
+def test_structured_output_null_treated_as_absent() -> None:
+    """A null structured_output must not surface as present-and-None."""
+    llm, _ = _make_llm_with_response(
+        _fake_json_response(result="plain text", structured_output=None)
+    )
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert not hasattr(resp, "structured_output")
+
+
+def test_provider_specific_fields_carry_object_and_raw_stop_reason() -> None:
+    """provider_specific_fields carries the parsed object and the CLI's raw stop_reason."""
+    obj = {"a": "x"}
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    psf = resp.choices[0].message.provider_specific_fields
+    assert psf["structured_output"] == obj
+    assert psf["stop_reason"] == "tool_use"
+
+
+def test_raw_stop_reason_surfaced_unconditionally() -> None:
+    """The raw stop_reason is surfaced even on a plain, unstructured call."""
+    llm, _ = _make_llm_with_response(_fake_json_response(stop_reason="end_turn"))
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "end_turn"
+
+
+def test_structured_output_survives_pre_made_model_response() -> None:
+    """litellm supplies its own ModelResponse; the attribute must land on THAT object."""
+    obj = {"a": "x"}
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output=obj
+    )
+    llm, _ = _make_llm_with_response(raw)
+    premade = litellm.ModelResponse()
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+        model_response=premade,
+    )
+    assert resp is premade
+    assert resp.structured_output == obj
+
+
+def test_finish_reason_normalised_on_structured_path() -> None:
+    """schema + tool_use maps to stop — tool_calls would lie about the message shape."""
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output={"a": "x"}
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": {"type": "object"}},
+            }
+        },
+    )
+    assert resp.choices[0].finish_reason == "stop"
+    # Nothing is destroyed — the CLI's own value is one field away.
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
+
+
+def test_finish_reason_untouched_without_schema() -> None:
+    """tool_use without a schema is NOT rewritten — no blanket remapping."""
+    raw = _fake_json_response(result="x", stop_reason="tool_use")
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    # litellm's ModelResponse maps tool_use -> tool_calls; we leave that alone here.
+    assert resp.choices[0].finish_reason == "tool_calls"
+
+
+def test_finish_reason_untouched_for_other_stop_reasons() -> None:
+    """A schema does not rewrite stop reasons other than tool_use."""
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="max_tokens", structured_output={"a": "x"}
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": {"type": "object"}},
+            }
+        },
+    )
+    assert resp.choices[0].finish_reason == "length"
+    assert (
+        resp.choices[0].message.provider_specific_fields["stop_reason"] == "max_tokens"
+    )
+
+
+def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
+    """Pins `_DISABLED_TOOLS` to a hardcoded list, and pins argv wiring to that list.
+
+    The `finish_reason` soundness comment in `_build_response` (schema + `tool_use` ->
+    `stop`) depends on `_DISABLED_TOOLS` disabling EVERY tool: that is what makes
+    `tool_use` unambiguous within this provider. If this test derived its expectation
+    from `_DISABLED_TOOLS` itself, shrinking (or renaming an entry in) the tuple would
+    shrink both sides of the comparison in lockstep and the test would stay green while
+    the soundness precondition silently broke — which is exactly what happened before
+    this test was rewritten (deleting "NotebookEdit" from the tuple left the old
+    version passing). `expected_disabled_tools` below is therefore written out
+    independently, as literal strings, so that ANY change to `_DISABLED_TOOLS` —
+    shrink, add, reorder, rename — fails this test and forces the author to look at
+    this comment and re-examine the soundness note before proceeding.
+    """
+    expected_disabled_tools = (
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+    )
+    assert _DISABLED_TOOLS == expected_disabled_tools, (
+        "_DISABLED_TOOLS has drifted from the hardcoded expectation in this test. "
+        "This list must disable EVERY tool for the tool_use -> stop finish_reason "
+        "mapping in _build_response to stay sound (see the SOUNDNESS comment there). "
+        "If this change is intentional, update both the tuple here AND revisit that "
+        "mapping — do not just fix this assertion."
+    )
+
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    argv = captured["argv"]
+    disallowed_values = [
+        argv[i + 1] for i, arg in enumerate(argv) if arg == "--disallowed-tools"
+    ]
+    for tool in expected_disabled_tools:
+        assert tool in disallowed_values, f"{tool!r} missing from --disallowed-tools"
+    assert len(disallowed_values) == len(expected_disabled_tools), (
+        f"argv carries {len(disallowed_values)} --disallowed-tools flag(s) but "
+        f"expected {len(expected_disabled_tools)} — argv's --disallowed-tools wiring "
+        "in _run has drifted from the expected tool list"
+    )

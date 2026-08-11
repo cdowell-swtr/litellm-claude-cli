@@ -8,10 +8,10 @@ Exposes a `claude-cli/<model>` namespace so you can call the local Claude subscr
 
 ```bash
 # via uv
-uv add "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.1"
+uv add "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.2.0"
 
 # via pip
-pip install "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.1.1"
+pip install "litellm-claude-cli @ git+https://github.com/cdowell-swtr/litellm-claude-cli@v0.2.0"
 ```
 
 **Requires:** Python 3.12+, `litellm>=1.88.1`, and the `claude` CLI installed and authenticated on PATH.
@@ -44,6 +44,61 @@ print(response.content[0].text)
 ```
 
 `register()` is idempotent — safe to call multiple times; existing `claude-cli` entries are replaced rather than duplicated.
+
+## Structured output
+
+Pass a JSON Schema with LiteLLM's standard `response_format` and the provider forwards it
+to `claude -p --json-schema`:
+
+```python
+import litellm
+from litellm_claude_cli import register
+
+register()
+
+resp = litellm.completion(
+    model="claude-cli/claude-haiku-4-5-20251001",
+    messages=[{"role": "user", "content": "Report the colour and count."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "sky",
+            "schema": {
+                "type": "object",
+                "properties": {"colour": {"type": "string"}, "count": {"type": "integer"}},
+                "required": ["colour", "count"],
+            },
+        },
+    },
+)
+
+resp.structured_output           # {"colour": "blue", "count": 3} — the CLI's parsed object
+resp.choices[0].message.content  # '{"colour":"blue","count":3}' — the same JSON as a string
+```
+
+A Pydantic model as `response_format` works too; LiteLLM normalises it to the shape above.
+
+`structured_output` is set only when the CLI returned a parsed object, so read it as
+`getattr(resp, "structured_output", None)` and fall back to `message.content`.
+
+**Use `litellm.completion()` for this.** `litellm.anthropic_messages()` rebuilds the
+response as a fixed-key Anthropic dict and drops `structured_output`; the schema is still
+applied and the JSON string still arrives in the text content, but the parsed object does not
+survive that path.
+
+**Schema size:** the CLI takes the schema inline with no file-path option, so a compact
+encoding that reaches 131072 bytes or more (Linux `MAX_ARG_STRLEN`) raises `ValueError`
+before the call runs. (131072 is the first *rejected* length, not the last accepted one —
+Linux's own check counts the NUL terminator.)
+
+**Error routing:** `ClaudeCliLLM` raises three mutually distinguishable exceptions —
+`ClaudeExhausted` (subscription exhaustion), `RuntimeError` (malformed CLI output), and
+`ValueError` (oversized schema) — and calling `ClaudeCliLLM` directly preserves that
+distinction. Calling through `litellm.completion()` does not: LiteLLM wraps *any*
+exception a `CustomLLM` raises in `litellm.exceptions.APIConnectionError`, so all three
+arrive there as the same wrapper class. To route on the original exception, either
+inspect the wrapped exception's `__context__` chain (LiteLLM does not set `__cause__`)
+or call `ClaudeCliLLM` directly.
 
 ## How it works
 
