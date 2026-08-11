@@ -51,7 +51,7 @@ Reads `response_format` out of `optional_params` and appends `--json-schema <com
   - `_extract_json_schema(optional_params: dict[str, Any] | None) -> dict[str, Any] | None`
   - `ClaudeCliLLM._run(self, model: str, messages: list[dict[str, Any]], pre_made_response: ModelResponse | None = None, optional_params: dict[str, Any] | None = None) -> ModelResponse`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_provider.py`:
 
@@ -147,13 +147,13 @@ from litellm_claude_cli import (
 )
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -k "json_schema or json_object" -v`
 
 Expected: FAIL — `ImportError: cannot import name '_extract_json_schema'`.
 
-- [ ] **Step 3: Add the extraction helper**
+- [x] **Step 3: Add the extraction helper**
 
 In `src/litellm_claude_cli/__init__.py`, after `_exhaustion_error` and before `class _Runner`:
 
@@ -184,7 +184,7 @@ def _extract_json_schema(
     return schema if isinstance(schema, dict) else None
 ```
 
-- [ ] **Step 4: Thread `optional_params` through and build the flag**
+- [x] **Step 4: Thread `optional_params` through and build the flag**
 
 In `ClaudeCliLLM`, replace both entry points so they forward `optional_params`:
 
@@ -239,19 +239,19 @@ Then inside the `try:` block, directly after the `argv = [...]` literal and **be
                 argv += ["--json-schema", schema_arg]
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -v`
 
 Expected: PASS — the four new tests plus all pre-existing ones.
 
-- [ ] **Step 6: Lint and type-check**
+- [x] **Step 6: Lint and type-check**
 
 Run: `.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && .venv/bin/python -m mypy src`
 
 Expected: all clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_provider.py
@@ -272,7 +272,7 @@ The schema goes in argv and the CLI has no file-path option for it, so `MAX_ARG_
 - Consumes: `_extract_json_schema` from Task 1.
 - Produces: `_MAX_ARG_STRLEN: int` (= `131072`), `_encode_schema_arg(schema: dict[str, Any]) -> str`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_provider.py`:
 
@@ -329,13 +329,13 @@ def test_schema_just_under_ceiling_is_accepted() -> None:
 
 Add `_encode_schema_arg` to the import block in `tests/test_provider.py`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -k "oversized or ceiling or encode_schema" -v`
 
 Expected: FAIL — `ImportError: cannot import name '_encode_schema_arg'`.
 
-- [ ] **Step 3: Add the constant and the guard**
+- [x] **Step 3: Add the constant and the guard**
 
 In `src/litellm_claude_cli/__init__.py`, add next to the other module constants (after `_EXHAUSTION_MESSAGE`):
 
@@ -369,7 +369,7 @@ def _encode_schema_arg(schema: dict[str, Any]) -> str:
     return encoded
 ```
 
-- [ ] **Step 4: Route `_run` through the guard**
+- [x] **Step 4: Route `_run` through the guard**
 
 In `_run`, replace the `schema_arg` assignment from Task 1 with:
 
@@ -379,19 +379,19 @@ In `_run`, replace the `schema_arg` assignment from Task 1 with:
         schema_arg = _encode_schema_arg(schema) if schema is not None else None
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Lint and type-check**
+- [x] **Step 6: Lint and type-check**
 
 Run: `.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && .venv/bin/python -m mypy src`
 
 Expected: all clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_provider.py
@@ -412,7 +412,7 @@ Everything from here to Task 4 is change 2 — droppable as a unit if it turns a
 - Consumes: `_run`'s `optional_params` threading from Task 1.
 - Produces: `ModelResponse.structured_output` (attribute, present only when the CLI returned a non-null `structured_output`); `message.provider_specific_fields` containing `{"structured_output": ..., "stop_reason": ...}`, where `stop_reason` is always present.
 
-- [ ] **Step 1: Extend the test helper and write the failing tests**
+- [x] **Step 1: Extend the test helper and write the failing tests**
 
 Replace `_fake_json_response` in `tests/test_provider.py` with a version that can carry structured output. The `_MISSING` sentinel distinguishes "no key at all" from "key present but null" — the two cases behave identically downstream but must both be exercised:
 
@@ -538,13 +538,13 @@ def test_structured_output_survives_pre_made_model_response() -> None:
     assert resp.structured_output == obj
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -k "structured or stop_reason or provider_specific" -v`
 
 Expected: FAIL — `AttributeError: 'ModelResponse' object has no attribute 'structured_output'`.
 
-- [ ] **Step 3: Build the fields in `_build_response`**
+- [x] **Step 3: Build the fields in `_build_response`**
 
 In `src/litellm_claude_cli/__init__.py`, inside `_build_response`, replace this block:
 
@@ -593,7 +593,7 @@ Then replace the `ModelResponse` construction and return:
     return mr
 ```
 
-- [ ] **Step 4: Carry the attribute onto litellm's pre-made response**
+- [x] **Step 4: Carry the attribute onto litellm's pre-made response**
 
 In `_run`, replace the `pre_made_response` branch. Without this the attribute is silently
 lost on the real `litellm.completion()` path, because litellm supplies its own
@@ -610,19 +610,19 @@ lost on the real `litellm.completion()` path, because litellm supplies its own
             return pre_made_response
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -v`
 
 Expected: PASS. Note `test_handler_single_turn_system_via_file_prompt_via_stdin` and the other pre-existing tests must still pass unchanged.
 
-- [ ] **Step 6: Lint and type-check**
+- [x] **Step 6: Lint and type-check**
 
 Run: `.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && .venv/bin/python -m mypy src`
 
 Expected: all clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_provider.py
@@ -641,7 +641,7 @@ git commit -m "feat(provider): surface CLI structured_output on the ModelRespons
 - Consumes: `_build_response` as left by Task 3; `_run`'s `schema_arg` local from Task 1.
 - Produces: `_build_response(raw: str, *, schema_requested: bool = False) -> ModelResponse`. The keyword is keyword-only and defaults to `False`, so the existing direct calls in `tests/test_provider.py` keep working unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_provider.py`:
 
@@ -706,13 +706,13 @@ def test_finish_reason_untouched_for_other_stop_reasons() -> None:
 > changes those mappings, update the expected value — do **not** add provider-side
 > remapping to compensate. Only the schema + `tool_use` pair is ours to translate.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -k finish_reason -v`
 
 Expected: FAIL — `test_finish_reason_normalised_on_structured_path` gets `tool_calls`, expected `stop`.
 
-- [ ] **Step 3: Add the mapping**
+- [x] **Step 3: Add the mapping**
 
 In `src/litellm_claude_cli/__init__.py`, change the `_build_response` signature:
 
@@ -754,7 +754,7 @@ and change the `ModelResponse` construction to use it:
                 "finish_reason": finish_reason,
 ```
 
-- [ ] **Step 4: Pass the flag from `_run`**
+- [x] **Step 4: Pass the flag from `_run`**
 
 In `_run`, replace `result = _build_response(raw)` with:
 
@@ -762,19 +762,19 @@ In `_run`, replace `result = _build_response(raw)` with:
         result = _build_response(raw, schema_requested=schema_arg is not None)
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_provider.py -v`
 
 Expected: PASS, all tests.
 
-- [ ] **Step 6: Lint and type-check**
+- [x] **Step 6: Lint and type-check**
 
 Run: `.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && .venv/bin/python -m mypy src`
 
 Expected: all clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_provider.py
@@ -793,7 +793,7 @@ The unit tests call `ClaudeCliLLM` directly. These go through real litellm, whic
 **Interfaces:**
 - Consumes: everything from Tasks 1–4. Adds no production code.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 Add to `tests/test_litellm_dispatch.py`:
 
@@ -922,25 +922,25 @@ def test_anthropic_messages_drops_structured_output():
     assert text == '{"a":"x"}'
 ```
 
-- [ ] **Step 2: Run the tests**
+- [x] **Step 2: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/test_litellm_dispatch.py -v`
 
 Expected: PASS, all four tests (one pre-existing plus three new).
 
-- [ ] **Step 3: Run the whole suite**
+- [x] **Step 3: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest -q`
 
 Expected: PASS, with only the live smoke test skipped.
 
-- [ ] **Step 4: Lint**
+- [x] **Step 4: Lint**
 
 Run: `.venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check .`
 
 Expected: clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_litellm_dispatch.py
@@ -959,7 +959,7 @@ Unit tests cannot catch a wrong flag name. Only a real CLI call can.
 **Interfaces:**
 - Consumes: Tasks 1–4. Adds no production code.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Add to `tests/test_live_smoke.py`:
 
@@ -1013,13 +1013,13 @@ def test_live_structured_output_conforms():
 
 Add `import json` to the imports at the top of `tests/test_live_smoke.py`.
 
-- [ ] **Step 2: Confirm it is skipped by default**
+- [x] **Step 2: Confirm it is skipped by default**
 
 Run: `.venv/bin/python -m pytest tests/test_live_smoke.py -v`
 
 Expected: 2 skipped.
 
-- [ ] **Step 3: Run it live**
+- [x] **Step 3: Run it live**
 
 Run: `RUN_LIVE_SMOKE=1 .venv/bin/python -m pytest tests/test_live_smoke.py -v`
 
@@ -1030,7 +1030,7 @@ If `finish_reason` is not `stop` or `stop_reason` is not `tool_use`, **stop and 
 the CLI's behaviour differs from what the spec recorded, and Task 4's mapping needs
 revisiting rather than the assertion being loosened.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/test_live_smoke.py
@@ -1049,11 +1049,11 @@ git commit -m "test(live): real --json-schema call asserts schema conformance"
 **Interfaces:**
 - Consumes: Tasks 1–6.
 
-- [ ] **Step 1: Bump the version**
+- [x] **Step 1: Bump the version**
 
 In `pyproject.toml`, change `version = "0.1.1"` to `version = "0.2.0"`.
 
-- [ ] **Step 2: Create `CHANGELOG.md`**
+- [x] **Step 2: Create `CHANGELOG.md`**
 
 ```markdown
 # Changelog
@@ -1128,7 +1128,7 @@ exec. This is distinct from `ClaudeExhausted` (exhaustion) and `RuntimeError`
 - Initial release: `claude-cli/<model>` provider wrapping headless `claude -p`.
 ```
 
-- [ ] **Step 3: Update the README**
+- [x] **Step 3: Update the README**
 
 Change both install pins from `@v0.1.1` to `@v0.2.0`. Then add a `## Structured output`
 section after the existing usage section:
@@ -1179,7 +1179,7 @@ survive that path.
 encoding over 131072 bytes (Linux `MAX_ARG_STRLEN`) raises `ValueError` before the call runs.
 ````
 
-- [ ] **Step 4: Update the Planning Instrument**
+- [x] **Step 4: Update the Planning Instrument**
 
 In `PLAN.md`, move `LCC3` into `Done`:
 
@@ -1211,7 +1211,7 @@ the inline schema reintroduces. Deviation from the brief's suggestion: none need
 kwarg. Limitation pinned by test: `anthropic_messages()` drops the attribute.
 ```
 
-- [ ] **Step 5: Verify everything**
+- [x] **Step 5: Verify everything**
 
 Run: `.venv/bin/python -m pytest -q && .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && .venv/bin/python -m mypy src && bash hooks/docs-layout-check.sh`
 
@@ -1219,7 +1219,7 @@ Expected: tests pass with only live smoke skipped; lint, format, types and docs-
 
 Also run the live suite once before tagging: `RUN_LIVE_SMOKE=1 .venv/bin/python -m pytest tests/test_live_smoke.py -v`
 
-- [ ] **Step 6: Commit and tag**
+- [x] **Step 6: Commit and tag**
 
 ```bash
 git add pyproject.toml CHANGELOG.md README.md PLAN.md ACTION_LOG.md

@@ -88,9 +88,11 @@ The schema goes in argv and the CLI offers no file-path alternative, which reint
 `MAX_ARG_STRLEN` (131072 bytes) ceiling this package already dodges for the system prompt. Exceeding
 it surfaces as an opaque exec failure.
 
-Before invoking the runner, if the encoded schema's UTF-8 length exceeds 131072 bytes, raise
-`ValueError` naming both the actual size and the ceiling. Guarded, not merely documented: the
-failure it replaces is unreadable, and `ValueError` keeps the error taxonomy in §7 clean.
+Before invoking the runner, if the encoded schema's UTF-8 length reaches or exceeds 131072 bytes,
+raise `ValueError` naming both the actual size and the ceiling. The comparison is `>=`, not `>`:
+Linux's own `MAX_ARG_STRLEN` check counts the NUL terminator, so a length of exactly 131072 bytes
+is already the first rejected length, not the last accepted one. Guarded, not merely documented:
+the failure it replaces is unreadable, and `ValueError` keeps the error taxonomy in §7 clean.
 
 ## 5. Output surface
 
@@ -151,7 +153,7 @@ exhaustion pauses and retries without penalty, malformed output is a task failur
 |---|---|
 | Subscription exhaustion | `ClaudeExhausted` (carries `reset_hint`) — unchanged |
 | Non-JSON / malformed CLI output, or a CLI error that is not exhaustion | `RuntimeError` — unchanged |
-| Encoded schema exceeds `MAX_ARG_STRLEN` | `ValueError` — new |
+| Encoded schema reaches or exceeds `MAX_ARG_STRLEN` | `ValueError` — new |
 
 `ValueError` is the right class for the new case: it is a caller error about a caller-supplied
 argument, detected before any subprocess runs, and it collides with neither existing kind.
@@ -178,8 +180,8 @@ README and the release notes.
 - `provider_specific_fields` carries the parsed object and the raw `stop_reason`.
 - `finish_reason` is `stop` for schema + `tool_use`; unchanged for `tool_use` without a schema, and
   unchanged for any other `stop_reason`.
-- A schema encoding to more than 131072 bytes raises `ValueError` naming the size and the ceiling —
-  this is the test pinning the argv-size decision.
+- A schema encoding to 131072 bytes or more raises `ValueError` naming the size and the ceiling —
+  this is the test pinning the argv-size decision, including the exact-boundary case.
 - The `--system-prompt-file`, `--exclude-dynamic-system-prompt-sections` and `--disallowed-tools`
   invariants still hold on the structured path; `--bare` is absent.
 

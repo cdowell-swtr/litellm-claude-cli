@@ -87,7 +87,18 @@ applied and the JSON string still arrives in the text content, but the parsed ob
 survive that path.
 
 **Schema size:** the CLI takes the schema inline with no file-path option, so a compact
-encoding over 131072 bytes (Linux `MAX_ARG_STRLEN`) raises `ValueError` before the call runs.
+encoding that reaches 131072 bytes or more (Linux `MAX_ARG_STRLEN`) raises `ValueError`
+before the call runs. (131072 is the first *rejected* length, not the last accepted one —
+Linux's own check counts the NUL terminator.)
+
+**Error routing:** `ClaudeCliLLM` raises three mutually distinguishable exceptions —
+`ClaudeExhausted` (subscription exhaustion), `RuntimeError` (malformed CLI output), and
+`ValueError` (oversized schema) — and calling `ClaudeCliLLM` directly preserves that
+distinction. Calling through `litellm.completion()` does not: LiteLLM wraps *any*
+exception a `CustomLLM` raises in `litellm.exceptions.APIConnectionError`, so all three
+arrive there as the same wrapper class. To route on the original exception, either
+inspect the wrapped exception's `__context__` chain (LiteLLM does not set `__cause__`)
+or call `ClaudeCliLLM` directly.
 
 ## How it works
 

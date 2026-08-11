@@ -122,18 +122,19 @@ def _encode_schema_arg(schema: dict[str, Any]) -> str:
     """Compactly encode *schema* for ``--json-schema``, refusing oversized input.
 
     Raises:
-        ValueError: if the encoding exceeds :data:`_MAX_ARG_STRLEN`.  Deliberately
-            neither :class:`ClaudeExhausted` nor :class:`RuntimeError` — callers route
-            exhaustion, malformed output and caller error differently.
+        ValueError: if the encoding reaches or exceeds :data:`_MAX_ARG_STRLEN`.
+            Deliberately neither :class:`ClaudeExhausted` nor :class:`RuntimeError`
+            — callers route exhaustion, malformed output and caller error differently.
     """
     encoded = json.dumps(schema, separators=(",", ":"))
     size = len(encoded.encode("utf-8"))
-    if size > _MAX_ARG_STRLEN:
+    if size >= _MAX_ARG_STRLEN:
         raise ValueError(
             f"JSON Schema is too large to pass to `claude --json-schema`: "
-            f"{size} bytes exceeds the {_MAX_ARG_STRLEN}-byte MAX_ARG_STRLEN ceiling. "
-            f"The CLI accepts the schema only as an inline argument, so there is no "
-            f"file-based fallback — reduce the schema."
+            f"{size} bytes reaches the {_MAX_ARG_STRLEN}-byte MAX_ARG_STRLEN ceiling "
+            f"(Linux's own check counts the NUL terminator, so this length is already "
+            f"the first rejected one). The CLI accepts the schema only as an inline "
+            f"argument, so there is no file-based fallback — reduce the schema."
         )
     return encoded
 

@@ -15,6 +15,7 @@ import pytest
 from litellm_claude_cli import (
     ClaudeCliLLM,
     ClaudeExhausted,
+    _DISABLED_TOOLS,
     _build_response,
     _encode_schema_arg,
     _exhaustion_error,
@@ -514,8 +515,25 @@ def test_oversized_schema_raises_before_subprocess() -> None:
 def test_schema_just_under_ceiling_is_accepted() -> None:
     """A schema below the ceiling is encoded rather than rejected."""
     encoded = _encode_schema_arg({"type": "object", "title": "x" * 1000})
-    assert len(encoded.encode("utf-8")) <= 131072
+    assert len(encoded.encode("utf-8")) < 131072
     assert encoded.startswith('{"type":"object"')
+
+
+def test_schema_encoding_exactly_at_ceiling_is_rejected() -> None:
+    """131072 bytes is the first REJECTED length, not the last accepted one.
+
+    Linux's own MAX_ARG_STRLEN check counts the NUL terminator, so an argv element
+    of exactly 131072 content bytes is already too long. Pad `title` so the compact
+    encoding lands on exactly 131072 bytes, confirm that before asserting the guard
+    fires on it.
+    """
+    # Overhead of `{"type":"object","title":""}` is 28 bytes; pad title to make the
+    # total exactly 131072 bytes.
+    schema = {"type": "object", "title": "x" * (131072 - 28)}
+    encoded = json.dumps(schema, separators=(",", ":"))
+    assert len(encoded.encode("utf-8")) == 131072
+    with pytest.raises(ValueError, match=r"131072"):
+        _encode_schema_arg(schema)
 
 
 def test_extract_json_schema_shapes() -> None:
@@ -688,4 +706,31 @@ def test_finish_reason_untouched_for_other_stop_reasons() -> None:
     assert resp.choices[0].finish_reason == "length"
     assert (
         resp.choices[0].message.provider_specific_fields["stop_reason"] == "max_tokens"
+    )
+
+
+def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
+    """Pins the coupling between `_DISABLED_TOOLS` and the `--disallowed-tools` flags.
+
+    The `finish_reason` soundness comment in `_build_response` (schema + `tool_use` ->
+    `stop`) depends on `_DISABLED_TOOLS` disabling EVERY tool: that is what makes
+    `tool_use` unambiguous within this provider. A contributor who shrinks the list
+    would silently invalidate that mapping while every other test stays green — this
+    test exists so shrinking the list fails loudly here instead.
+    """
+    llm, captured = _make_llm_with_response(_fake_json_response())
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    argv = captured["argv"]
+    disallowed_values = [
+        argv[i + 1] for i, arg in enumerate(argv) if arg == "--disallowed-tools"
+    ]
+    for tool in _DISABLED_TOOLS:
+        assert tool in disallowed_values, f"{tool!r} missing from --disallowed-tools"
+    assert len(disallowed_values) == len(_DISABLED_TOOLS), (
+        "argv carries a different number of --disallowed-tools flags than "
+        "_DISABLED_TOOLS entries — the list and argv have drifted apart"
     )

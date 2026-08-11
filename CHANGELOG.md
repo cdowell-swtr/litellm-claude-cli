@@ -25,8 +25,9 @@ returned a parsed object — absent otherwise, never present-and-`None`. Read it
 `getattr(resp, "structured_output", None)` and fall back to
 `resp.choices[0].message.content`, which always carries the JSON string.
 
-`resp.choices[0].message.provider_specific_fields` carries the same parsed object plus
-the CLI's raw `stop_reason`, surfaced on every call.
+`resp.choices[0].message.provider_specific_fields` carries the CLI's raw `stop_reason`,
+which is surfaced on every call, plus the parsed object under the `structured_output`
+key — present only when the CLI returned one.
 
 ### `finish_reason` on the structured path — behaviour change
 
@@ -52,10 +53,20 @@ but **a caller needing the parsed object must use `litellm.completion()`**.
 ### Schema size ceiling
 
 The CLI accepts a schema only as an inline argument, with no file-path option, so it is
-subject to Linux's `MAX_ARG_STRLEN`. A schema whose compact encoding exceeds 131072
-bytes raises `ValueError` before any subprocess runs, rather than failing opaquely at
-exec. This is distinct from `ClaudeExhausted` (exhaustion) and `RuntimeError`
-(malformed output).
+subject to Linux's `MAX_ARG_STRLEN`. A schema whose compact encoding reaches 131072
+bytes or more raises `ValueError` before any subprocess runs, rather than failing
+opaquely at exec. (131072 is the first *rejected* length, not the last accepted one —
+Linux's own check counts the NUL terminator.)
+
+The provider itself raises three mutually distinguishable exceptions —
+`ClaudeExhausted` (subscription exhaustion), `RuntimeError` (malformed CLI output),
+and this `ValueError` (oversized schema) — and that distinction is real when you call
+`ClaudeCliLLM` directly. It does **not** carry through `litellm.completion()`:
+LiteLLM wraps *any* exception a `CustomLLM` raises in
+`litellm.exceptions.APIConnectionError`, so all three arrive at that entry point as
+the same wrapper class. To route on the original exception, either inspect the
+wrapped exception's `__context__` chain (LiteLLM does not set `__cause__`) or call
+`ClaudeCliLLM` directly instead of going through `litellm.completion()`.
 
 ### Verified against
 

@@ -9,7 +9,8 @@ import json
 from typing import Any
 
 import litellm
-from litellm_claude_cli import ClaudeCliLLM
+import pytest
+from litellm_claude_cli import ClaudeCliLLM, ClaudeExhausted
 
 
 def _run(awaitable_or_value: Any) -> Any:
@@ -190,3 +191,105 @@ def test_anthropic_messages_drops_structured_output():
     content = out["content"] if isinstance(out, dict) else out.content
     text = content[0]["text"] if isinstance(content[0], dict) else content[0].text
     assert text == '{"a":"x"}'
+
+
+def _exhausted_runner(argv, *, input_text):
+    return json.dumps(
+        {
+            "is_error": True,
+            "result": "You've hit your usage limit · resets 3pm (America/Los_Angeles)",
+        }
+    )
+
+
+def test_completion_wraps_provider_exceptions_in_api_connection_error():
+    """PINS a LiteLLM behaviour, not a property this package chose or endorses.
+
+    `litellm.completion()` wraps ANY exception a `CustomLLM.completion()` raises in
+    `litellm.exceptions.APIConnectionError` — including `ClaudeExhausted`. The
+    original exception is not reachable via `__cause__` (LiteLLM raises `from` nothing
+    there); it is reachable only by walking `__context__`, which Python populates
+    automatically for an exception raised while handling another.
+
+    This test exists so that a future LiteLLM release which stops wrapping (or starts
+    setting `__cause__`) is caught here rather than silently invalidating what
+    CHANGELOG.md and README.md say about routing on the original exception class.
+    A caller who needs to route on `ClaudeExhausted` / `RuntimeError` / `ValueError`
+    must either inspect `exc.__context__` or call `ClaudeCliLLM` directly.
+    """
+    saved = litellm.custom_provider_map
+    litellm.custom_provider_map = [
+        {
+            "provider": "claude-cli",
+            "custom_handler": ClaudeCliLLM(runner=_exhausted_runner),
+        }
+    ]
+    try:
+        with pytest.raises(Exception) as exc_info:
+            litellm.completion(
+                model="claude-cli/claude-haiku-4-5-20251001",
+                messages=[{"role": "user", "content": "go"}],
+            )
+    finally:
+        litellm.custom_provider_map = saved
+
+    raised = exc_info.value
+    # Not the original class...
+    assert not isinstance(raised, ClaudeExhausted)
+    assert type(raised).__name__ != "ClaudeExhausted"
+    # ...and not reachable via __cause__.
+    assert raised.__cause__ is None
+
+    # ...but IS recoverable by walking __context__.
+    cur: BaseException | None = raised
+    found = None
+    while cur is not None:
+        if isinstance(cur, ClaudeExhausted):
+            found = cur
+            break
+        cur = cur.__context__
+    assert found is not None, (
+        "ClaudeExhausted not recoverable from the wrapped exception's __context__ "
+        "chain — LiteLLM's wrapping behaviour changed; update CHANGELOG.md/README.md"
+    )
+
+
+def _plain_runner(argv, *, input_text):
+    return json.dumps(
+        {
+            "is_error": False,
+            "stop_reason": "end_turn",
+            "result": "plain text",
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+        }
+    )
+
+
+def test_completion_no_structured_output_stays_absent_through_pre_made_response():
+    """Drives an absent-structured_output payload through litellm.completion() —
+    the pre-made-ModelResponse copy path (`ClaudeCliLLM._run`'s `pre_made_response`
+    branch), which the direct-call unit tests in test_provider.py never exercise.
+
+    Pins two contracts on the path a real consumer actually uses:
+      - `structured_output` stays an absent attribute, never present-and-None
+        (Finding 2) — a naive `pre_made_response.structured_output = getattr(...)`
+        would set it unconditionally and this would fail.
+      - `"structured_output"` stays an absent key in `provider_specific_fields`
+        (Finding 3) — a naive unconditional assignment in `_build_response` would
+        set the key to `None` and this would fail.
+    """
+    saved = litellm.custom_provider_map
+    litellm.custom_provider_map = [
+        {"provider": "claude-cli", "custom_handler": ClaudeCliLLM(runner=_plain_runner)}
+    ]
+    try:
+        resp = litellm.completion(
+            model="claude-cli/claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": "go"}],
+        )
+    finally:
+        litellm.custom_provider_map = saved
+
+    assert not hasattr(resp, "structured_output")
+    assert "structured_output" not in resp.choices[0].message.provider_specific_fields
+    assert resp.choices[0].message.content == "plain text"
