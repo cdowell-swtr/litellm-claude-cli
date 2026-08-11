@@ -38,3 +38,14 @@ Shipped 0.2.0: `response_format` json_schema forwarded as `--json-schema`, CLI
 the inline schema reintroduces. Deviation from the brief's suggestion: none needed —
 `response_format` was verified to reach `CustomLLM` kwargs untransformed, so no bespoke
 kwarg. Limitation pinned by test: `anthropic_messages()` drops the attribute.
+
+#### #0007 · amended · LCC3 · 2026-08-11
+Whole-branch review found the release notes asserted an error-taxonomy guarantee the recommended
+call path does not deliver: `litellm.completion()` wraps every provider exception in
+`APIConnectionError`, so `ClaudeExhausted` / `RuntimeError` / `ValueError` are recoverable only via
+`exc.__context__` (`__cause__` is `None`). Pre-existing runtime behaviour, newly mis-described —
+CHANGELOG and README corrected and the wrapping pinned by test. Also: `>` → `>=` at the argv
+ceiling (Linux counts the NUL terminator, so exactly 131072 bytes was the first *rejected* length,
+not the last accepted one), plus tests pinning the `pre_made_response` copy path and
+`_DISABLED_TOOLS` exhaustiveness. Operational reason: the `v0.2.0` tag was retagged onto the
+amended head, so the release a consumer installs contains these corrections.
