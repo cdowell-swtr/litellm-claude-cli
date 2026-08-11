@@ -243,8 +243,13 @@ def _render_messages_to_prompt(
     return system_text, user_prompt_text
 
 
-def _build_response(raw: str) -> ModelResponse:
+def _build_response(raw: str, *, schema_requested: bool = False) -> ModelResponse:
     """Parse the JSON output from ``claude -p`` into a :class:`ModelResponse`.
+
+    Args:
+        raw: the CLI's ``--output-format json`` payload.
+        schema_requested: whether this call carried ``--json-schema``.  Gates the
+            ``finish_reason`` normalisation below.
 
     Raises:
         RuntimeError: if *raw* is not valid JSON, not a dict, or signals an
@@ -290,6 +295,21 @@ def _build_response(raw: str) -> ModelResponse:
         cache_creation_input_tokens=cache_creation,
     )
 
+    # `finish_reason` is a normalised interface field, not a provider passthrough.
+    # `tool_calls` means "the caller must execute something and continue the loop",
+    # and there is nothing here to execute: the tool call is only how the CLI
+    # implements structured output, and no tool_calls array is exposed.  Left alone,
+    # litellm maps the CLI's `tool_use` to `tool_calls` and a tool-runner loop either
+    # errors on the missing array or spins.
+    #
+    # SOUNDNESS: this holds ONLY because _DISABLED_TOOLS disables every tool, so within
+    # this provider `tool_use` has exactly one possible cause — the forced tool call
+    # implementing structured output.  If the tool-disable list is ever relaxed, this
+    # mapping stops being sound and must be revisited.
+    finish_reason = raw_stop_reason
+    if schema_requested and raw_stop_reason == "tool_use":
+        finish_reason = "stop"
+
     # The CLI's own stop_reason is surfaced unconditionally — it is a pass-through of
     # what the CLI reported, and making it conditional would mean the case most worth
     # inspecting is the one that looks different.
@@ -305,7 +325,7 @@ def _build_response(raw: str) -> ModelResponse:
                     "content": text,
                     "provider_specific_fields": provider_specific_fields,
                 },
-                "finish_reason": raw_stop_reason,
+                "finish_reason": finish_reason,
             }
         ]
     )
@@ -406,7 +426,7 @@ class ClaudeCliLLM(CustomLLM):
             except OSError:
                 pass
 
-        result = _build_response(raw)
+        result = _build_response(raw, schema_requested=schema_arg is not None)
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:

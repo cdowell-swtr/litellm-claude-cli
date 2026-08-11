@@ -633,3 +633,59 @@ def test_structured_output_survives_pre_made_model_response() -> None:
     )
     assert resp is premade
     assert resp.structured_output == obj
+
+
+def test_finish_reason_normalised_on_structured_path() -> None:
+    """schema + tool_use maps to stop — tool_calls would lie about the message shape."""
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="tool_use", structured_output={"a": "x"}
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": {"type": "object"}},
+            }
+        },
+    )
+    assert resp.choices[0].finish_reason == "stop"
+    # Nothing is destroyed — the CLI's own value is one field away.
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
+
+
+def test_finish_reason_untouched_without_schema() -> None:
+    """tool_use without a schema is NOT rewritten — no blanket remapping."""
+    raw = _fake_json_response(result="x", stop_reason="tool_use")
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    # litellm's ModelResponse maps tool_use -> tool_calls; we leave that alone here.
+    assert resp.choices[0].finish_reason == "tool_calls"
+
+
+def test_finish_reason_untouched_for_other_stop_reasons() -> None:
+    """A schema does not rewrite stop reasons other than tool_use."""
+    raw = _fake_json_response(
+        result='{"a":"x"}', stop_reason="max_tokens", structured_output={"a": "x"}
+    )
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": {"type": "object"}},
+            }
+        },
+    )
+    assert resp.choices[0].finish_reason == "length"
+    assert (
+        resp.choices[0].message.provider_specific_fields["stop_reason"] == "max_tokens"
+    )
