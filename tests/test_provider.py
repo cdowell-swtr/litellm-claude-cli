@@ -710,14 +710,40 @@ def test_finish_reason_untouched_for_other_stop_reasons() -> None:
 
 
 def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
-    """Pins the coupling between `_DISABLED_TOOLS` and the `--disallowed-tools` flags.
+    """Pins `_DISABLED_TOOLS` to a hardcoded list, and pins argv wiring to that list.
 
     The `finish_reason` soundness comment in `_build_response` (schema + `tool_use` ->
     `stop`) depends on `_DISABLED_TOOLS` disabling EVERY tool: that is what makes
-    `tool_use` unambiguous within this provider. A contributor who shrinks the list
-    would silently invalidate that mapping while every other test stays green — this
-    test exists so shrinking the list fails loudly here instead.
+    `tool_use` unambiguous within this provider. If this test derived its expectation
+    from `_DISABLED_TOOLS` itself, shrinking (or renaming an entry in) the tuple would
+    shrink both sides of the comparison in lockstep and the test would stay green while
+    the soundness precondition silently broke — which is exactly what happened before
+    this test was rewritten (deleting "NotebookEdit" from the tuple left the old
+    version passing). `expected_disabled_tools` below is therefore written out
+    independently, as literal strings, so that ANY change to `_DISABLED_TOOLS` —
+    shrink, add, reorder, rename — fails this test and forces the author to look at
+    this comment and re-examine the soundness note before proceeding.
     """
+    expected_disabled_tools = (
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+    )
+    assert _DISABLED_TOOLS == expected_disabled_tools, (
+        "_DISABLED_TOOLS has drifted from the hardcoded expectation in this test. "
+        "This list must disable EVERY tool for the tool_use -> stop finish_reason "
+        "mapping in _build_response to stay sound (see the SOUNDNESS comment there). "
+        "If this change is intentional, update both the tuple here AND revisit that "
+        "mapping — do not just fix this assertion."
+    )
+
     llm, captured = _make_llm_with_response(_fake_json_response())
     llm.completion(
         model="claude-cli/claude-haiku-4-5-20251001",
@@ -728,9 +754,10 @@ def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
     disallowed_values = [
         argv[i + 1] for i, arg in enumerate(argv) if arg == "--disallowed-tools"
     ]
-    for tool in _DISABLED_TOOLS:
+    for tool in expected_disabled_tools:
         assert tool in disallowed_values, f"{tool!r} missing from --disallowed-tools"
-    assert len(disallowed_values) == len(_DISABLED_TOOLS), (
-        "argv carries a different number of --disallowed-tools flags than "
-        "_DISABLED_TOOLS entries — the list and argv have drifted apart"
+    assert len(disallowed_values) == len(expected_disabled_tools), (
+        f"argv carries {len(disallowed_values)} --disallowed-tools flag(s) but "
+        f"expected {len(expected_disabled_tools)} — argv's --disallowed-tools wiring "
+        "in _run has drifted from the expected tool list"
     )
