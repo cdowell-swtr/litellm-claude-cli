@@ -5,7 +5,8 @@ This module is self-contained — it has zero external dependencies beyond
 
 The provider exposes a ``claude-cli/<model>`` namespace via LiteLLM's
 ``custom_provider_map`` mechanism, delegating each call to ``claude -p`` with
-all agentic tools disabled so every call is exactly one model turn.
+the tools in ``_DISABLED_TOOLS`` disabled by default (an optional
+``Capabilities`` can grant some back) so every call is exactly one model turn.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import os
 import re
 import subprocess  # noqa: S404 — invoking the local `claude` CLI by fixed argv
 import tempfile
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import litellm
@@ -37,6 +39,59 @@ _DISABLED_TOOLS = (
     "Task",
     "NotebookEdit",
 )
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """What a single ``claude -p`` call is permitted to touch.
+
+    Parameters
+    ----------
+    tools:
+        Tool names to ALLOW.  Each is subtracted from the disable list, so the
+        valid names are exactly :data:`_DISABLED_TOOLS` — anything else is
+        either already enabled (making the grant meaningless) or a typo, and
+        both raise.  Matching is exact and case-sensitive: accepting ``"bash"``
+        would leave ``Bash``'s disable flag in argv while the caller believed
+        the tool was enabled.
+    browser:
+        Attach the browser with ``--chrome``.  The browser's own tools arrive
+        with that flag, so ``browser=True`` carrying no ``tools`` is a coherent
+        and supported configuration — a call may drive a browser while ``Bash``
+        and the rest stay disabled.
+    """
+
+    tools: tuple[str, ...] = ()
+    browser: bool = False
+
+    def __post_init__(self) -> None:
+        unknown = tuple(t for t in self.tools if t not in _DISABLED_TOOLS)
+        if unknown:
+            raise ValueError(
+                "tool name(s) not in the disable list (either already enabled, "
+                "or a typo): "
+                + ", ".join(repr(u) for u in unknown)
+                + ". Valid names, matched exactly: "
+                + ", ".join(_DISABLED_TOOLS)
+                + "."
+            )
+
+
+def _disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]:
+    """Resolve the tools to disable for one call.
+
+    ``None`` returns :data:`_DISABLED_TOOLS` **itself**, so a caller that passes
+    no capabilities gets argv byte-identical to the build that predates them —
+    by construction, not by care.
+
+    Emission order is always ``_DISABLED_TOOLS`` order, so the caller's tuple
+    order is not observable in argv.
+    """
+    if capabilities is None:
+        return _DISABLED_TOOLS
+    granted = frozenset(capabilities.tools)
+    return tuple(t for t in _DISABLED_TOOLS if t not in granted)
+
 
 # Substrings marking usage-limit / subscription-exhaustion in `claude -p` output.
 _EXHAUSTION_MARKERS = (
@@ -244,13 +299,11 @@ def _render_messages_to_prompt(
     return system_text, user_prompt_text
 
 
-def _build_response(raw: str, *, schema_requested: bool = False) -> ModelResponse:
+def _build_response(raw: str) -> ModelResponse:
     """Parse the JSON output from ``claude -p`` into a :class:`ModelResponse`.
 
     Args:
         raw: the CLI's ``--output-format json`` payload.
-        schema_requested: whether this call carried ``--json-schema``.  Gates the
-            ``finish_reason`` normalisation below.
 
     Raises:
         RuntimeError: if *raw* is not valid JSON, not a dict, or signals an
@@ -296,20 +349,26 @@ def _build_response(raw: str, *, schema_requested: bool = False) -> ModelRespons
         cache_creation_input_tokens=cache_creation,
     )
 
-    # `finish_reason` is a normalised interface field, not a provider passthrough.
-    # `tool_calls` means "the caller must execute something and continue the loop",
-    # and there is nothing here to execute: the tool call is only how the CLI
-    # implements structured output, and no tool_calls array is exposed.  Left alone,
-    # litellm maps the CLI's `tool_use` to `tool_calls` and a tool-runner loop either
-    # errors on the missing array or spins.
-    #
-    # SOUNDNESS: this holds ONLY because _DISABLED_TOOLS disables every tool, so within
-    # this provider `tool_use` has exactly one possible cause — the forced tool call
-    # implementing structured output.  If the tool-disable list is ever relaxed, this
-    # mapping stops being sound and must be revisited.
-    finish_reason = raw_stop_reason
-    if schema_requested and raw_stop_reason == "tool_use":
-        finish_reason = "stop"
+    # SOUNDNESS: `tool_use` maps to `stop` unconditionally, on two independent
+    # grounds, both of which hold for every `Capabilities` configuration.
+    #   1. This provider never populates a `tool_calls` array.  litellm maps
+    #      `finish_reason="tool_use"` to OpenAI's `"tool_calls"`, so emitting it
+    #      hands a downstream tool-runner loop something it cannot honour — it
+    #      errors on the missing array or spins.  Nothing a caller can enable
+    #      makes this provider expose a tool call, so this ground is independent
+    #      of capabilities.
+    #   2. The ordinary cause is structured output: when a schema was requested
+    #      and the payload carries `structured_output`, the `tool_use` IS the
+    #      CLI's forced tool call implementing that schema — a completed turn,
+    #      for which `stop` is simply correct.
+    # This replaces 0.2.0's premise ("every tool is disabled, so structured
+    # output is the only possible cause of tool_use"), which enabling a tool
+    # invalidates.  Ground 1 is strictly stronger: capabilities cannot reach it.
+    # No information is lost — the CLI's raw value is surfaced unconditionally
+    # below, and `structured_output` is present exactly when the turn produced
+    # one, so a caller distinguishes a completed structured turn from a
+    # truncated tool-use turn by the evidence itself.
+    finish_reason = "stop" if raw_stop_reason == "tool_use" else raw_stop_reason
 
     # The CLI's own stop_reason is surfaced unconditionally — it is a pass-through of
     # what the CLI reported, and making it conditional would mean the case most worth
@@ -349,14 +408,20 @@ class ClaudeCliLLM(CustomLLM):
     runner:
         Callable with signature ``(argv, *, input_text) -> str``.  Defaults to
         the real subprocess runner.  Override in tests.
+    capabilities:
+        What the call may touch.  ``None`` (the default) disables every tool,
+        producing argv byte-identical to the build that predates this
+        parameter.
     """
 
     def __init__(
         self,
         runner: _Runner = _default_runner,
+        capabilities: Capabilities | None = None,
     ) -> None:
         super().__init__()
         self._runner = runner
+        self._capabilities = capabilities
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -417,7 +482,12 @@ class ClaudeCliLLM(CustomLLM):
             ]
             if schema_arg is not None:
                 argv += ["--json-schema", schema_arg]
-            for t in _DISABLED_TOOLS:
+            # The capability block: everything governing what this call may
+            # touch.  `--chrome`'s position within argv is not significant to
+            # the CLI; it sits here so the block reads as a unit.
+            if self._capabilities is not None and self._capabilities.browser:
+                argv.append("--chrome")
+            for t in _disabled_tools_for(self._capabilities):
                 argv += ["--disallowed-tools", t]
 
             raw = self._runner(argv, input_text=user_prompt)
@@ -427,7 +497,7 @@ class ClaudeCliLLM(CustomLLM):
             except OSError:
                 pass
 
-        result = _build_response(raw, schema_requested=schema_arg is not None)
+        result = _build_response(raw)
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:
