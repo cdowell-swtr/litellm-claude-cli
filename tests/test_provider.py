@@ -674,8 +674,12 @@ def test_finish_reason_normalised_on_structured_path() -> None:
     assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
 
 
-def test_finish_reason_untouched_without_schema() -> None:
-    """tool_use without a schema is NOT rewritten — no blanket remapping."""
+def test_finish_reason_never_emits_tool_calls() -> None:
+    """Was `test_finish_reason_untouched_without_schema`, which pinned "no
+    blanket remapping".  That rule rested on every tool being disabled, which
+    `Capabilities` retires.  The mapping is now unconditional and this test
+    pins the consequence: `tool_calls` must never reach a caller, because no
+    `tool_calls` array is ever populated to back it."""
     raw = _fake_json_response(result="x", stop_reason="tool_use")
     llm, _ = _make_llm_with_response(raw)
     resp = llm.completion(
@@ -683,8 +687,8 @@ def test_finish_reason_untouched_without_schema() -> None:
         messages=[{"role": "user", "content": "go"}],
         optional_params={},
     )
-    # litellm's ModelResponse maps tool_use -> tool_calls; we leave that alone here.
-    assert resp.choices[0].finish_reason == "tool_calls"
+    assert resp.choices[0].finish_reason != "tool_calls"
+    assert resp.choices[0].finish_reason == "stop"
 
 
 def test_finish_reason_untouched_for_other_stop_reasons() -> None:
@@ -709,20 +713,67 @@ def test_finish_reason_untouched_for_other_stop_reasons() -> None:
     )
 
 
+def test_finish_reason_tool_use_maps_to_stop_without_a_schema() -> None:
+    """`tool_use` maps to `stop` on a ground independent of any schema: this
+    provider never populates a `tool_calls` array, so litellm's tool_use ->
+    tool_calls mapping would hand a downstream tool-runner loop something it
+    cannot honour.  Nothing a caller enables can make this provider expose a
+    tool call."""
+    raw = _fake_json_response(result="x", stop_reason="tool_use")
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={},
+    )
+    assert resp.choices[0].finish_reason == "stop"
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
+
+
+def test_truncated_tool_use_is_distinguishable_by_evidence_not_finish_reason() -> None:
+    """A completed structured turn and a truncated tool-use turn both report
+    `stop`; the caller tells them apart by `structured_output`'s presence, which
+    is the evidence itself."""
+    raw = _fake_json_response(result="x", stop_reason="tool_use")
+    llm, _ = _make_llm_with_response(raw)
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "go"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "v", "schema": {"type": "object"}},
+            }
+        },
+    )
+    assert resp.choices[0].finish_reason == "stop"
+    assert "structured_output" not in resp.choices[0].message.provider_specific_fields
+    assert not hasattr(resp, "structured_output")
+
+
 def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
     """Pins `_DISABLED_TOOLS` to a hardcoded list, and pins argv wiring to that list.
 
-    The `finish_reason` soundness comment in `_build_response` (schema + `tool_use` ->
-    `stop`) depends on `_DISABLED_TOOLS` disabling EVERY tool: that is what makes
-    `tool_use` unambiguous within this provider. If this test derived its expectation
-    from `_DISABLED_TOOLS` itself, shrinking (or renaming an entry in) the tuple would
-    shrink both sides of the comparison in lockstep and the test would stay green while
-    the soundness precondition silently broke — which is exactly what happened before
-    this test was rewritten (deleting "NotebookEdit" from the tuple left the old
-    version passing). `expected_disabled_tools` below is therefore written out
-    independently, as literal strings, so that ANY change to `_DISABLED_TOOLS` —
-    shrink, add, reorder, rename — fails this test and forces the author to look at
-    this comment and re-examine the soundness note before proceeding.
+    Two things rest on this tuple. It is the basis of the one-model-turn
+    invariant: every tool disabled means a call cannot run an agentic loop. And
+    it is the set of names `Capabilities.tools` validates against — a grant
+    outside it raises, so shrinking this tuple silently narrows what callers may
+    ask for.
+
+    If this test derived its expectation from `_DISABLED_TOOLS` itself, shrinking
+    (or renaming an entry in) the tuple would shrink both sides of the comparison
+    in lockstep and the test would stay green while the invariant silently broke
+    — which is exactly what happened before this test was rewritten (deleting
+    "NotebookEdit" from the tuple left the old version passing).
+    `expected_disabled_tools` below is therefore written out independently, as
+    literal strings, so that ANY change to `_DISABLED_TOOLS` — shrink, add,
+    reorder, rename — fails this test and forces the author to look at this
+    comment first.
+
+    When the CLI gains an executable tool, this tuple should GROW to preserve the
+    invariant; subtraction in `_disabled_tools_for` keeps its meaning unchanged.
+    The known consumer keeps its own copy of this expectation, so a change here
+    reddens its suite too and gets re-read by a person on both sides.
     """
     expected_disabled_tools = (
         "Bash",
@@ -738,10 +789,9 @@ def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
     )
     assert _DISABLED_TOOLS == expected_disabled_tools, (
         "_DISABLED_TOOLS has drifted from the hardcoded expectation in this test. "
-        "This list must disable EVERY tool for the tool_use -> stop finish_reason "
-        "mapping in _build_response to stay sound (see the SOUNDNESS comment there). "
-        "If this change is intentional, update both the tuple here AND revisit that "
-        "mapping — do not just fix this assertion."
+        "This list is the one-model-turn invariant AND the set of names "
+        "Capabilities.tools accepts. If this change is intentional, update the "
+        "tuple here AND check both — do not just fix this assertion."
     )
 
     llm, captured = _make_llm_with_response(_fake_json_response())

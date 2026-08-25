@@ -297,13 +297,11 @@ def _render_messages_to_prompt(
     return system_text, user_prompt_text
 
 
-def _build_response(raw: str, *, schema_requested: bool = False) -> ModelResponse:
+def _build_response(raw: str) -> ModelResponse:
     """Parse the JSON output from ``claude -p`` into a :class:`ModelResponse`.
 
     Args:
         raw: the CLI's ``--output-format json`` payload.
-        schema_requested: whether this call carried ``--json-schema``.  Gates the
-            ``finish_reason`` normalisation below.
 
     Raises:
         RuntimeError: if *raw* is not valid JSON, not a dict, or signals an
@@ -349,20 +347,26 @@ def _build_response(raw: str, *, schema_requested: bool = False) -> ModelRespons
         cache_creation_input_tokens=cache_creation,
     )
 
-    # `finish_reason` is a normalised interface field, not a provider passthrough.
-    # `tool_calls` means "the caller must execute something and continue the loop",
-    # and there is nothing here to execute: the tool call is only how the CLI
-    # implements structured output, and no tool_calls array is exposed.  Left alone,
-    # litellm maps the CLI's `tool_use` to `tool_calls` and a tool-runner loop either
-    # errors on the missing array or spins.
-    #
-    # SOUNDNESS: this holds ONLY because _DISABLED_TOOLS disables every tool, so within
-    # this provider `tool_use` has exactly one possible cause — the forced tool call
-    # implementing structured output.  If the tool-disable list is ever relaxed, this
-    # mapping stops being sound and must be revisited.
-    finish_reason = raw_stop_reason
-    if schema_requested and raw_stop_reason == "tool_use":
-        finish_reason = "stop"
+    # SOUNDNESS: `tool_use` maps to `stop` unconditionally, on two independent
+    # grounds, both of which hold for every `Capabilities` configuration.
+    #   1. This provider never populates a `tool_calls` array.  litellm maps
+    #      `finish_reason="tool_use"` to OpenAI's `"tool_calls"`, so emitting it
+    #      hands a downstream tool-runner loop something it cannot honour — it
+    #      errors on the missing array or spins.  Nothing a caller can enable
+    #      makes this provider expose a tool call, so this ground is independent
+    #      of capabilities.
+    #   2. The ordinary cause is structured output: when a schema was requested
+    #      and the payload carries `structured_output`, the `tool_use` IS the
+    #      CLI's forced tool call implementing that schema — a completed turn,
+    #      for which `stop` is simply correct.
+    # This replaces 0.2.0's premise ("every tool is disabled, so structured
+    # output is the only possible cause of tool_use"), which enabling a tool
+    # invalidates.  Ground 1 is strictly stronger: capabilities cannot reach it.
+    # No information is lost — the CLI's raw value is surfaced unconditionally
+    # below, and `structured_output` is present exactly when the turn produced
+    # one, so a caller distinguishes a completed structured turn from a
+    # truncated tool-use turn by the evidence itself.
+    finish_reason = "stop" if raw_stop_reason == "tool_use" else raw_stop_reason
 
     # The CLI's own stop_reason is surfaced unconditionally — it is a pass-through of
     # what the CLI reported, and making it conditional would mean the case most worth
@@ -491,7 +495,7 @@ class ClaudeCliLLM(CustomLLM):
             except OSError:
                 pass
 
-        result = _build_response(raw, schema_requested=schema_arg is not None)
+        result = _build_response(raw)
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:
