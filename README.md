@@ -102,7 +102,9 @@ or call `ClaudeCliLLM` directly.
 
 ## Capabilities
 
-Every agentic tool is disabled by default. Pass an optional `Capabilities` to
+By default, the ten tools in `_DISABLED_TOOLS` (`Bash`, `Read`, `Edit`, `Write`,
+`Grep`, `Glob`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`) are disabled so
+every call is exactly one model turn. Pass an optional `Capabilities` to
 `ClaudeCliLLM` to grant specific tools and/or attach the browser:
 
 ```python
@@ -111,22 +113,47 @@ from litellm_claude_cli import Capabilities, ClaudeCliLLM
 llm = ClaudeCliLLM(capabilities=Capabilities(tools=("Read", "Grep"), browser=True))
 ```
 
-Every other tool stays disabled — `tools` only grants the ones you name. Names
-are validated against the disable list and must match exactly (case-sensitive);
-an unknown or wrong-case name raises `ValueError`. `browser=True` appends
-`--chrome` and is supported with no granted tools at all.
+The other listed tools stay disabled — `tools` only grants the ones you name.
+Names are validated against the disable list and must match exactly
+(case-sensitive); an unknown or wrong-case name raises `ValueError`.
+`browser=True` appends `--chrome` and is supported with no granted tools at
+all.
 
-Omitting `capabilities` disables everything, as before.
+Omitting `capabilities` disables all ten listed tools, as before.
+
+**`register()` takes no capabilities.** `register()` always installs a plain
+`ClaudeCliLLM()` with `capabilities=None` — a process-global capability grant
+would contradict the deliberately per-instance design. A caller that needs
+`Capabilities` registers a configured handler directly instead:
+
+```python
+litellm.custom_provider_map = [
+    {"provider": "claude-cli", "custom_handler": ClaudeCliLLM(capabilities=Capabilities(tools=("Read",)))}
+]
+```
+
+**Granting a tool is not the same as permitting it.** `tools` only removes
+that name's `--disallowed-tools` flag; argv carries no `--permission-mode` and
+no `--allowed-tools`, so the CLI's own permission layer still gates tool use
+in headless `-p`. Only `Read` has been proven to work end-to-end this way —
+`Bash`, `Edit`, and `Write` may still be refused. A refusal surfaces as
+`finish_reason: "stop"` with no `structured_output` and a prose refusal in the
+content, indistinguishable from ordinary invalid model output except by the
+raw `stop_reason` in `provider_specific_fields`. Relatedly, a granted file
+tool only reaches paths under the CLI's working directory.
 
 **`finish_reason` note:** a granted tool can make the CLI report `stop_reason:
 "tool_use"`, same as the structured-output path above. This provider never
 populates a `tool_calls` array, so `tool_use` always maps to `finish_reason:
 "stop"` — the raw value is still available in
-`provider_specific_fields["stop_reason"]`.
+`provider_specific_fields["stop_reason"]`. As with structured output above,
+`litellm.anthropic_messages()` drops `provider_specific_fields` entirely, so a
+caller on that path has no way to detect a truncated `tool_use` turn; use
+`litellm.completion()` if you need to.
 
 ## How it works
 
-Each call shells out to `claude -p` with all agentic tools disabled so every call is exactly one model turn. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are propagated through to the LiteLLM `Usage` object.
+Each call shells out to `claude -p` with the ten tools in `_DISABLED_TOOLS` disabled (unless `Capabilities` grants some back) so every call is exactly one model turn. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are propagated through to the LiteLLM `Usage` object.
 
 ## Public API
 

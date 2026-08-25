@@ -5,7 +5,8 @@ This module is self-contained — it has zero external dependencies beyond
 
 The provider exposes a ``claude-cli/<model>`` namespace via LiteLLM's
 ``custom_provider_map`` mechanism, delegating each call to ``claude -p`` with
-all agentic tools disabled so every call is exactly one model turn.
+the tools in ``_DISABLED_TOOLS`` disabled by default (an optional
+``Capabilities`` can grant some back) so every call is exactly one model turn.
 """
 
 from __future__ import annotations
@@ -67,7 +68,8 @@ class Capabilities:
         unknown = tuple(t for t in self.tools if t not in _DISABLED_TOOLS)
         if unknown:
             raise ValueError(
-                "unknown tool name(s): "
+                "tool name(s) not in the disable list (either already enabled, "
+                "or a typo): "
                 + ", ".join(repr(u) for u in unknown)
                 + ". Valid names, matched exactly: "
                 + ", ".join(_DISABLED_TOOLS)

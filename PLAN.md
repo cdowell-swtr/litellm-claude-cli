@@ -6,6 +6,8 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 
 ## Next
 
+_(nothing queued)_
+
 ## Done
 - [x] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0) → log:#0009
 - [x] LCC3 — Structured output via `--json-schema` + `structured_output` on the response → log:#0006

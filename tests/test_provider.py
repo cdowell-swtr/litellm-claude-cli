@@ -674,12 +674,15 @@ def test_finish_reason_normalised_on_structured_path() -> None:
     assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
 
 
-def test_finish_reason_never_emits_tool_calls() -> None:
+def test_finish_reason_tool_use_maps_to_stop_without_a_schema() -> None:
     """Was `test_finish_reason_untouched_without_schema`, which pinned "no
     blanket remapping".  That rule rested on every tool being disabled, which
-    `Capabilities` retires.  The mapping is now unconditional and this test
-    pins the consequence: `tool_calls` must never reach a caller, because no
-    `tool_calls` array is ever populated to back it."""
+    `Capabilities` retires.  The mapping is now unconditional on a ground
+    independent of any schema: this provider never populates a `tool_calls`
+    array, so litellm's tool_use -> tool_calls mapping would hand a downstream
+    tool-runner loop something it cannot honour.  Nothing a caller enables can
+    make this provider expose a tool call, so `tool_calls` must never reach a
+    caller and the CLI's raw value stays available unconditionally."""
     raw = _fake_json_response(result="x", stop_reason="tool_use")
     llm, _ = _make_llm_with_response(raw)
     resp = llm.completion(
@@ -689,6 +692,7 @@ def test_finish_reason_never_emits_tool_calls() -> None:
     )
     assert resp.choices[0].finish_reason != "tool_calls"
     assert resp.choices[0].finish_reason == "stop"
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
 
 
 def test_finish_reason_untouched_for_other_stop_reasons() -> None:
@@ -711,23 +715,6 @@ def test_finish_reason_untouched_for_other_stop_reasons() -> None:
     assert (
         resp.choices[0].message.provider_specific_fields["stop_reason"] == "max_tokens"
     )
-
-
-def test_finish_reason_tool_use_maps_to_stop_without_a_schema() -> None:
-    """`tool_use` maps to `stop` on a ground independent of any schema: this
-    provider never populates a `tool_calls` array, so litellm's tool_use ->
-    tool_calls mapping would hand a downstream tool-runner loop something it
-    cannot honour.  Nothing a caller enables can make this provider expose a
-    tool call."""
-    raw = _fake_json_response(result="x", stop_reason="tool_use")
-    llm, _ = _make_llm_with_response(raw)
-    resp = llm.completion(
-        model="claude-cli/claude-haiku-4-5-20251001",
-        messages=[{"role": "user", "content": "go"}],
-        optional_params={},
-    )
-    assert resp.choices[0].finish_reason == "stop"
-    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
 
 
 def test_truncated_tool_use_is_distinguishable_by_evidence_not_finish_reason() -> None:

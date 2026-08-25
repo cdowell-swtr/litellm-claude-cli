@@ -180,7 +180,9 @@ here, because none was available to quote.
 
 No streaming. No new models. No change to any behaviour observable by a `capabilities=None` caller
 other than §5's `finish_reason`, which is a strictly wider mapping of a value that was previously
-unreachable for them.
+unreachable for them. A `permission_mode` field on `Capabilities` was considered and deliberately
+excluded from this release, because `tools` only removes the disable flag and the CLI's own
+permission layer in headless mode is a separate concern from what this design governs.
 
 ## 8. Release
 

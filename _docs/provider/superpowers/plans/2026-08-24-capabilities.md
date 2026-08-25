@@ -33,7 +33,7 @@
 - Consumes: `_DISABLED_TOOLS` (existing module constant, a 10-tuple).
 - Produces: `Capabilities(tools: tuple[str, ...] = (), browser: bool = False)`, frozen dataclass, importable as `from litellm_claude_cli import Capabilities`. Raises `ValueError` from `__post_init__` on any name not in `_DISABLED_TOOLS`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/test_capabilities.py`:
 
@@ -119,12 +119,12 @@ def test_capabilities_allows_duplicate_valid_names() -> None:
     assert Capabilities(tools=("Bash", "Bash")).tools == ("Bash", "Bash")
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: FAIL — `ImportError: cannot import name 'Capabilities' from 'litellm_claude_cli'`
 
-- [ ] **Step 3: Add the import**
+- [x] **Step 3: Add the import**
 
 In `src/litellm_claude_cli/__init__.py`, in the stdlib import block (currently `import json` / `os` / `re` / `subprocess` / `tempfile`), add in alphabetical position:
 
@@ -134,7 +134,7 @@ from dataclasses import dataclass
 
 It goes after `import tempfile` and before `from typing import Any, Protocol`.
 
-- [ ] **Step 4: Add the class immediately after the `_DISABLED_TOOLS` tuple**
+- [x] **Step 4: Add the class immediately after the `_DISABLED_TOOLS` tuple**
 
 `_DISABLED_TOOLS` ends with `)` on line 39. Insert below it (before the `_EXHAUSTION_MARKERS` comment):
 
@@ -176,17 +176,17 @@ class Capabilities:
             )
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: PASS (7 tests)
 
-- [ ] **Step 6: Run the full gate**
+- [x] **Step 6: Run the full gate**
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q`
 Expected: all pass, no existing test broken.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_capabilities.py
@@ -205,7 +205,7 @@ git commit -m "feat: add validated Capabilities type (LCC4)"
 - Consumes: `Capabilities` and `_DISABLED_TOOLS` from Task 1.
 - Produces: `_disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]`. Returns the `_DISABLED_TOOLS` object itself when given `None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 First amend the existing import line at the top of `tests/test_capabilities.py` — a
 mid-file import would fail `ruff check` under `E402`:
@@ -259,12 +259,12 @@ def test_disabled_tools_for_ignores_duplicates() -> None:
     assert once == twice
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: FAIL — `ImportError: cannot import name '_disabled_tools_for'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Directly below the `Capabilities` class:
 
@@ -287,12 +287,12 @@ def _disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]:
     return tuple(t for t in _DISABLED_TOOLS if t not in granted)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: PASS (13 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_capabilities.py
@@ -311,7 +311,7 @@ git commit -m "feat: resolve the disable list from Capabilities (LCC4)"
 - Consumes: `_disabled_tools_for` (Task 2), `Capabilities` (Task 1).
 - Produces: `ClaudeCliLLM(runner=..., capabilities: Capabilities | None = None)`, storing `self._capabilities`. argv gains an optional `--chrome` immediately before the `--disallowed-tools` pairs.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_capabilities.py`:
 
@@ -445,12 +445,12 @@ def test_chrome_and_grants_compose() -> None:
     assert len(values) == len(_DISABLED_TOOLS) - 2
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: FAIL — `TypeError: ClaudeCliLLM.__init__() got an unexpected keyword argument 'capabilities'`
 
-- [ ] **Step 3: Add the constructor parameter**
+- [x] **Step 3: Add the constructor parameter**
 
 Replace the constructor docstring tail and `__init__` (currently lines 344-359). The existing docstring ends with the `runner:` paragraph; add a `capabilities:` paragraph after it, then the new signature:
 
@@ -471,7 +471,7 @@ Replace the constructor docstring tail and `__init__` (currently lines 344-359).
         self._capabilities = capabilities
 ```
 
-- [ ] **Step 4: Build argv from the resolved list**
+- [x] **Step 4: Build argv from the resolved list**
 
 In `_run`, replace the existing disable loop (currently lines 420-421):
 
@@ -492,17 +492,17 @@ with the capability block — `--chrome` first, so everything governing what the
                 argv += ["--disallowed-tools", t]
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_capabilities.py -q`
 Expected: PASS (22 tests)
 
-- [ ] **Step 6: Run the full gate**
+- [x] **Step 6: Run the full gate**
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q`
 Expected: all pass. `tests/test_provider.py` is unaffected by this task — every existing argv test runs with `capabilities=None`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_capabilities.py
@@ -524,7 +524,7 @@ git commit -m "feat: build argv from capabilities (LCC4)"
 
 **Note on the two existing tests this task changes.** `test_finish_reason_untouched_without_schema` currently asserts `finish_reason == "tool_calls"` and documents "no blanket remapping". That is precisely the behaviour the spec replaces, so the test inverts rather than being deleted — its own comment ("litellm's ModelResponse maps tool_use -> tool_calls") is the evidence for why. `test_disabled_tools_all_reach_argv_as_disallowed` keeps its hardcoded ten and all its assertions; only its *stated rationale* changes, because it currently justifies itself by the premise being retired.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_provider.py`, after `test_finish_reason_untouched_for_other_stop_reasons`:
 
@@ -567,7 +567,7 @@ def test_truncated_tool_use_is_distinguishable_by_evidence_not_finish_reason() -
     assert not hasattr(resp, "structured_output")
 ```
 
-- [ ] **Step 2: Invert the test that pins the retired behaviour**
+- [x] **Step 2: Invert the test that pins the retired behaviour**
 
 In `tests/test_provider.py`, replace `test_finish_reason_untouched_without_schema` (lines 677-686) entirely with:
 
@@ -589,12 +589,12 @@ def test_finish_reason_never_emits_tool_calls() -> None:
     assert resp.choices[0].finish_reason == "stop"
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_provider.py -q -k finish_reason`
 Expected: FAIL — the three tests above report `tool_calls` where `stop` is asserted.
 
-- [ ] **Step 4: Make the mapping unconditional**
+- [x] **Step 4: Make the mapping unconditional**
 
 In `_build_response`, replace the SOUNDNESS comment and mapping (lines 306-312) with:
 
@@ -621,7 +621,7 @@ In `_build_response`, replace the SOUNDNESS comment and mapping (lines 306-312) 
     finish_reason = "stop" if raw_stop_reason == "tool_use" else raw_stop_reason
 ```
 
-- [ ] **Step 5: Remove the now-unused `schema_requested` parameter**
+- [x] **Step 5: Remove the now-unused `schema_requested` parameter**
 
 Line 247 becomes:
 
@@ -635,7 +635,7 @@ Delete the `schema_requested:` paragraph from its docstring (line 252 and its co
         result = _build_response(raw)
 ```
 
-- [ ] **Step 6: Update the tripwire test's rationale**
+- [x] **Step 6: Update the tripwire test's rationale**
 
 In `tests/test_provider.py`, `test_disabled_tools_all_reach_argv_as_disallowed` keeps every assertion and the hardcoded ten. Replace only its docstring (lines 713-727) with:
 
@@ -676,17 +676,17 @@ And replace the assertion message (lines 741-746) with:
     )
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [x] **Step 7: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_provider.py tests/test_litellm_dispatch.py -q`
 Expected: PASS. `test_finish_reason_normalised_on_structured_path` and `test_finish_reason_untouched_for_other_stop_reasons` still pass unchanged — the first is ground 2, the second is a non-`tool_use` value.
 
-- [ ] **Step 8: Run the full gate**
+- [x] **Step 8: Run the full gate**
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q`
 Expected: all pass.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/litellm_claude_cli/__init__.py tests/test_provider.py
@@ -706,7 +706,7 @@ git commit -m "fix: re-key tool_use -> stop onto a capability-independent ground
 
 **Note.** This ports the *shape* of the consumer's probe, not a transcript. No observed `stop_reason` value is asserted, because none was available to quote — the test asserts the two facts that matter and would catch a wrong flag name or a CLI whose behaviour with a tool enabled differs from Task 4's assumption. Unit tests cannot catch either.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Append to `tests/test_live_smoke.py`:
 
@@ -758,19 +758,19 @@ def test_live_granted_tool_with_schema_finishes_as_stop(tmp_path):
     assert "colour" in structured
 ```
 
-- [ ] **Step 2: Verify it skips by default**
+- [x] **Step 2: Verify it skips by default**
 
 Run: `uv run pytest tests/test_live_smoke.py -q`
 Expected: skipped (unless `RUN_LIVE_SMOKE=1` is already set) — it bills a real subscription call and must never run in CI.
 
-- [ ] **Step 3: Run it for real, once**
+- [x] **Step 3: Run it for real, once**
 
 Run: `RUN_LIVE_SMOKE=1 uv run pytest tests/test_live_smoke.py -q -k granted_tool`
 Expected: PASS.
 
 **If it fails, stop and report — do not adjust the assertion to match.** A failure here is the empirical finding this test exists to produce: it means the real CLI's behaviour with a tool enabled differs from Task 4's reasoning, and the spec's §5 needs revisiting before release.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/test_live_smoke.py
@@ -789,23 +789,23 @@ git commit -m "test: live proof of finish_reason with a granted tool (LCC4)"
 - Consumes: everything above.
 - Produces: the `v0.3.0` tag the known consumer pins.
 
-- [ ] **Step 1: Bump the version**
+- [x] **Step 1: Bump the version**
 
 `pyproject.toml` line 3: `version = "0.2.0"` → `version = "0.3.0"`
 
-- [ ] **Step 2: Re-lock**
+- [x] **Step 2: Re-lock**
 
 Run: `uv lock`
 Expected: `uv.lock` updates. The lockfile carries this package's own version and goes stale on every release; it must move in the same commit as the bump.
 
-- [ ] **Step 3: Add the CHANGELOG entry**
+- [x] **Step 3: Add the CHANGELOG entry**
 
 Add a `## 0.3.0` section above `## 0.2.0`, matching the existing file's style, covering:
 - **Added** — `Capabilities(tools=..., browser=...)`, an optional `ClaudeCliLLM` parameter. Pinned public surface. `tools` names are subtracted from the disable list and validated against it; an unknown or wrong-case name raises `ValueError`. `browser=True` appends `--chrome`, and is supported with no granted tools.
 - **Changed** — `finish_reason`: `tool_use` now maps to `stop` unconditionally, not only on the structured path. This provider never populates a `tool_calls` array, so `tool_calls` could never be honoured by a caller. The CLI's raw value is unchanged in `provider_specific_fields["stop_reason"]`. A caller passing no capabilities cannot produce the newly-affected case.
 - **Unchanged** — argv is byte-identical for `capabilities=None`, pinned by test.
 
-- [ ] **Step 4: Update the README**
+- [x] **Step 4: Update the README**
 
 Add a capabilities usage block after the structured-output block:
 
@@ -817,19 +817,19 @@ llm = ClaudeCliLLM(capabilities=Capabilities(tools=("Read", "Grep"), browser=Tru
 
 Note that every other tool stays disabled, that names are validated against the disable list and must match exactly, and that omitting `capabilities` disables everything as before. Move the install pins from `v0.2.0` to `v0.3.0`.
 
-- [ ] **Step 5: Run the full gate**
+- [x] **Step 5: Run the full gate**
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest -q`
 Expected: all pass.
 
-- [ ] **Step 6: Tick the plan and log**
+- [x] **Step 6: Tick the plan and log**
 
 In `PLAN.md`, move `LCC4` from `Next` to `Done` as:
 `- [x] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0) → log:#0008`
 
 Append `#### #0008 · completed · LCC4 · <date>` to `ACTION_LOG.md`, recording what shipped, the two existing tests whose rationale changed and why, and the live-test result.
 
-- [ ] **Step 7: Commit and open the PR**
+- [x] **Step 7: Commit and open the PR**
 
 ```bash
 git add -A
@@ -838,7 +838,7 @@ git push -u origin LCC4-capabilities
 gh pr create --fill
 ```
 
-- [ ] **Step 8: Tag AFTER the squash-merge**
+- [x] **Step 8: Tag AFTER the squash-merge**
 
 Once the PR is squash-merged, tag `master` — **not** the feature branch. A tag made on the branch points at a commit that is not on `master` after a squash-merge, and the consumer pins by tag.
 
