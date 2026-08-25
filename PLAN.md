@@ -7,7 +7,7 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 ## Next
 
 ## Done
-- [x] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0) → log:#0008
+- [x] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0) → log:#0009
 - [x] LCC3 — Structured output via `--json-schema` + `structured_output` on the response → log:#0006
 - [x] LCC2 — Register litellm-claude-cli in the patterns implementer registries (PI/MEMORY/Git/Docs-layout) → log:#0004
 - [x] LCC1 — Adopt patterns conventions (PI, Committed Memory, Git, Docs-layout) → log:#0002

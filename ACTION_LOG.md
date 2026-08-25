@@ -50,7 +50,7 @@ not the last accepted one), plus tests pinning the `pre_made_response` copy path
 `_DISABLED_TOOLS` exhaustiveness. Operational reason: the `v0.2.0` tag was retagged onto the
 amended head, so the release a consumer installs contains these corrections.
 
-#### #0007 · inserted · LCC4 · 2026-08-24
+#### #0008 · inserted · LCC4 · 2026-08-24
 First-class capabilities for the jsp consumer, so it can delete the in-repo argv wrapper that
 reaches across the dependency boundary into `self._runner`. Design spec at
 `_docs/provider/superpowers/specs/2026-08-24-capabilities-design.md`. Scope agreed with the
@@ -62,7 +62,7 @@ array. The brief's `_DISABLED_TOOLS` count (11) was wrong against source (10) an
 upstream. Operational reason: the consumer's wrapper survives only while its pin is frozen, so
 any provider release meets it as a silent conflict.
 
-#### #0008 · completed · LCC4 · 2026-08-24
+#### #0009 · completed · LCC4 · 2026-08-24
 Shipped 0.3.0: `Capabilities(tools, browser)` as an optional `ClaudeCliLLM` parameter,
 argv built from it rather than rewritten, validation on the dataclass (unknown or
 wrong-case tool name raises `ValueError`), and `tool_use` → `stop` re-keyed
