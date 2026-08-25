@@ -5,7 +5,7 @@ Current state only — ordered `Next` (with deps) + recent `Done`. History and r
 repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 
 ## Next
-_(nothing queued)_
+- [ ] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0)
 
 ## Done
 - [x] LCC3 — Structured output via `--json-schema` + `structured_output` on the response → log:#0006

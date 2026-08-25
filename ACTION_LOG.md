@@ -49,3 +49,15 @@ ceiling (Linux counts the NUL terminator, so exactly 131072 bytes was the first 
 not the last accepted one), plus tests pinning the `pre_made_response` copy path and
 `_DISABLED_TOOLS` exhaustiveness. Operational reason: the `v0.2.0` tag was retagged onto the
 amended head, so the release a consumer installs contains these corrections.
+
+#### #0007 · inserted · LCC4 · 2026-08-24
+First-class capabilities for the jsp consumer, so it can delete the in-repo argv wrapper that
+reaches across the dependency boundary into `self._runner`. Design spec at
+`_docs/provider/superpowers/specs/2026-08-24-capabilities-design.md`. Scope agreed with the
+consumer's orchestrator against its brief; two of its statements were re-derived rather than
+adopted. Its `--chrome`-at-end requirement was an artefact of appending to a finished argv (the
+CLI does not care), and its "surface raw `stop_reason` unchanged" fallback would have handed
+LiteLLM a `finish_reason` this provider cannot honour, since it never emits a `tool_calls`
+array. The brief's `_DISABLED_TOOLS` count (11) was wrong against source (10) and was corrected
+upstream. Operational reason: the consumer's wrapper survives only while its pin is frozen, so
+any provider release meets it as a silent conflict.
