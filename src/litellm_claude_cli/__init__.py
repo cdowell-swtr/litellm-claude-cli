@@ -402,14 +402,20 @@ class ClaudeCliLLM(CustomLLM):
     runner:
         Callable with signature ``(argv, *, input_text) -> str``.  Defaults to
         the real subprocess runner.  Override in tests.
+    capabilities:
+        What the call may touch.  ``None`` (the default) disables every tool,
+        producing argv byte-identical to the build that predates this
+        parameter.
     """
 
     def __init__(
         self,
         runner: _Runner = _default_runner,
+        capabilities: Capabilities | None = None,
     ) -> None:
         super().__init__()
         self._runner = runner
+        self._capabilities = capabilities
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -470,7 +476,12 @@ class ClaudeCliLLM(CustomLLM):
             ]
             if schema_arg is not None:
                 argv += ["--json-schema", schema_arg]
-            for t in _DISABLED_TOOLS:
+            # The capability block: everything governing what this call may
+            # touch.  `--chrome`'s position within argv is not significant to
+            # the CLI; it sits here so the block reads as a unit.
+            if self._capabilities is not None and self._capabilities.browser:
+                argv.append("--chrome")
+            for t in _disabled_tools_for(self._capabilities):
                 argv += ["--disallowed-tools", t]
 
             raw = self._runner(argv, input_text=user_prompt)
