@@ -94,3 +94,54 @@ def test_live_structured_output_conforms():
     # The forced tool call must not leak as tool_calls.
     assert resp.choices[0].finish_reason == "stop"
     assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "tool_use"
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_LIVE_SMOKE") != "1" or shutil.which("claude") is None,
+    reason="live: set RUN_LIVE_SMOKE=1 with the `claude` CLI on PATH",
+)
+def test_live_granted_tool_with_schema_finishes_as_stop(tmp_path, monkeypatch):
+    """One real `-p` call with a tool enabled AND a schema.
+
+    The only check that can catch a wrong flag name, or a CLI whose behaviour
+    with a tool enabled differs from the `tool_use` -> `stop` reasoning in
+    `_build_response`.  Read is the cheapest tool to grant: the model reads one
+    small local file and answers from it.
+    """
+    from litellm_claude_cli import Capabilities
+
+    target = tmp_path / "colour.txt"
+    target.write_text("The colour is teal.\n")
+    # The CLI's file access is scoped to its working directory; make tmp_path
+    # that directory so the granted Read tool can actually reach the file
+    # while keeping pytest's per-test isolation and automatic cleanup.
+    monkeypatch.chdir(tmp_path)
+
+    llm = ClaudeCliLLM(capabilities=Capabilities(tools=("Read",)))
+    resp = llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[
+            {
+                "role": "user",
+                "content": f"Read the file {target} and report the colour it names.",
+            }
+        ],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "colour",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"colour": {"type": "string"}},
+                        "required": ["colour"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        },
+    )
+
+    assert resp.choices[0].finish_reason == "stop"
+    structured = resp.choices[0].message.provider_specific_fields["structured_output"]
+    assert "colour" in structured
