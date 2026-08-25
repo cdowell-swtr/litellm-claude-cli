@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0
+
+### First-class capabilities
+
+`ClaudeCliLLM` accepts an optional `Capabilities(tools=..., browser=...)` parameter,
+a pinned public type:
+
+```python
+from litellm_claude_cli import Capabilities, ClaudeCliLLM
+
+llm = ClaudeCliLLM(capabilities=Capabilities(tools=("Read", "Grep"), browser=True))
+```
+
+`tools` names the tools to grant; each is subtracted from the disable list, so the
+valid names are exactly the disabled-by-default set. Matching is exact and
+case-sensitive — an unknown or wrong-case name raises `ValueError` rather than
+silently granting nothing. `browser=True` appends `--chrome` and is supported with
+no granted tools at all.
+
+Omitting `capabilities` (or passing `None`) disables every tool, unchanged from
+prior releases — argv is byte-identical to the pre-`Capabilities` build in that
+case, pinned by test.
+
+### `finish_reason` — behaviour change
+
+`tool_use` now maps to `finish_reason: "stop"` **unconditionally**, not only when a
+JSON schema was requested (0.2.0's behaviour). This provider never populates a
+`tool_calls` array on the response, so LiteLLM's `tool_use` → `"tool_calls"`
+mapping would hand a caller something no array backs, regardless of which granted
+tool produced the CLI's `tool_use`. The CLI's raw value is unchanged and still
+surfaced in `provider_specific_fields["stop_reason"]`.
+
+This does not change behaviour for a caller passing no `capabilities`: with every
+tool disabled, a requested JSON schema is the only thing that can produce
+`tool_use`, and that case already mapped to `"stop"` in 0.2.0.
+
+### Verified against
+
+`claude` CLI 2.1.227, litellm 1.89.0. The declared floor remains `litellm>=1.88.1`.
+
 ## 0.2.0
 
 ### Structured output

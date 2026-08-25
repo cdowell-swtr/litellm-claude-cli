@@ -61,3 +61,36 @@ LiteLLM a `finish_reason` this provider cannot honour, since it never emits a `t
 array. The brief's `_DISABLED_TOOLS` count (11) was wrong against source (10) and was corrected
 upstream. Operational reason: the consumer's wrapper survives only while its pin is frozen, so
 any provider release meets it as a silent conflict.
+
+#### #0008 · completed · LCC4 · 2026-08-24
+Shipped 0.3.0: `Capabilities(tools, browser)` as an optional `ClaudeCliLLM` parameter,
+argv built from it rather than rewritten, validation on the dataclass (unknown or
+wrong-case tool name raises `ValueError`), and `tool_use` → `stop` re-keyed
+unconditionally rather than only on the structured-output path.
+
+Two existing tests changed rather than broke. `test_finish_reason_untouched_without_schema`
+pinned the retired premise that only the structured path produced `tool_use`; it was
+replaced by `test_finish_reason_never_emits_tool_calls`, which asserts the mapping
+holds regardless of cause. The `_DISABLED_TOOLS` tripwire test kept every assertion and
+hardcoded name unchanged — only its stated rationale changed, since it had justified
+itself by referencing the premise that was just retired.
+
+Live-test finding: the first live run failed, and the cause was not the design. A
+granted tool only reaches files under the CLI's working directory; the test had
+targeted pytest's `tmp_path`, which sits outside it. A controlled A/B with
+byte-identical flags confirmed the grant mechanism itself works: a file inside the cwd
+was read by the tool; the identical call against a file outside the cwd got "I need
+permission to read the file." Fixed by `monkeypatch.chdir(tmp_path)`; the test's
+assertions were unchanged.
+
+Evidence obtained: with the Read tool actually executing and a schema requested in the
+same real call, the CLI's raw `stop_reason` is `tool_use`, mapping to `finish_reason:
+"stop"`, with `structured_output` present. This value had never been observed for this
+configuration before, and it confirms the re-key against the real CLI rather than only
+against mocks.
+
+Failure signature worth knowing for future debugging: a tool-granted call whose target
+is outside the cwd returns `finish_reason: "stop"`, no `structured_output`, and a prose
+refusal in the message content — indistinguishable from ordinary invalid model output
+except by the raw `stop_reason`, which is `end_turn` for the outside-cwd wall versus
+`tool_use` for a genuinely truncated turn.
