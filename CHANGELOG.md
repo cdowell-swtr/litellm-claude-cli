@@ -19,7 +19,7 @@ case-sensitive — an unknown or wrong-case name raises `ValueError` rather than
 silently granting nothing. `browser=True` appends `--chrome` and is supported with
 no granted tools at all.
 
-Omitting `capabilities` (or passing `None`) disables every tool, unchanged from
+Omitting `capabilities` (or passing `None`) disables all ten listed tools, unchanged from
 prior releases — argv is byte-identical to the pre-`Capabilities` build in that
 case, pinned by test.
 

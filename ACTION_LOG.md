@@ -94,3 +94,15 @@ is outside the cwd returns `finish_reason: "stop"`, no `structured_output`, and 
 refusal in the message content — indistinguishable from ordinary invalid model output
 except by the raw `stop_reason`, which is `end_turn` for the outside-cwd wall versus
 `tool_use` for a genuinely truncated turn.
+
+#### #0010 · note · 2026-08-24
+Docs accuracy sweep after v0.3.0: four sites still said `None`/omitting `capabilities`
+disables "every tool", when only the ten in `_DISABLED_TOOLS` are ever disabled — tools
+outside that list (TodoWrite, BashOutput, Skill, MCP tools) were never disabled and remain
+available. The v0.3.0 final review caught this class and the fix wave corrected the README
+and module docstring, but its scope missed `ClaudeCliLLM.__init__`'s own `capabilities:`
+docstring, two test docstrings, and a CHANGELOG line, so the overclaim shipped in v0.3.0.
+Corrected here. Deliberately left: the two places that QUOTE 0.2.0's retired premise as
+history (`_build_response`'s SOUNDNESS comment and the inverted finish_reason test) — those
+are accurate as quotations. Docs only, no behaviour change, no version bump.
+
