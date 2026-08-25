@@ -409,9 +409,9 @@ class ClaudeCliLLM(CustomLLM):
         Callable with signature ``(argv, *, input_text) -> str``.  Defaults to
         the real subprocess runner.  Override in tests.
     capabilities:
-        What the call may touch.  ``None`` (the default) disables every tool,
-        producing argv byte-identical to the build that predates this
-        parameter.
+        What the call may touch.  ``None`` (the default) disables the ten tools
+        in :data:`_DISABLED_TOOLS`, producing argv byte-identical to the build
+        that predates this parameter.
     """
 
     def __init__(

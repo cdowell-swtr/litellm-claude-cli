@@ -742,7 +742,7 @@ def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
     """Pins `_DISABLED_TOOLS` to a hardcoded list, and pins argv wiring to that list.
 
     Two things rest on this tuple. It is the basis of the one-model-turn
-    invariant: every tool disabled means a call cannot run an agentic loop. And
+    invariant: with every tool in it disabled, a call cannot run an agentic loop. And
     it is the set of names `Capabilities.tools` validates against — a grant
     outside it raises, so shrinking this tuple silently narrows what callers may
     ask for.

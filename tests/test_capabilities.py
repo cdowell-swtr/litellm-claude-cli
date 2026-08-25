@@ -236,7 +236,7 @@ def test_browser_false_never_emits_chrome() -> None:
 
 def test_browser_with_no_granted_tools_is_supported() -> None:
     """A common live shape: the browser's own tools arrive with --chrome, so the
-    model may drive a browser while every other tool stays disabled."""
+    model may drive a browser while the ten listed tools stay disabled."""
     llm, captured = _make_llm(Capabilities(browser=True))
     _call(llm)
     argv = captured["argv"]
