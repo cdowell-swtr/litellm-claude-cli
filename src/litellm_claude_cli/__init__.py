@@ -15,6 +15,7 @@ import os
 import re
 import subprocess  # noqa: S404 — invoking the local `claude` CLI by fixed argv
 import tempfile
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import litellm
@@ -37,6 +38,42 @@ _DISABLED_TOOLS = (
     "Task",
     "NotebookEdit",
 )
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """What a single ``claude -p`` call is permitted to touch.
+
+    Parameters
+    ----------
+    tools:
+        Tool names to ALLOW.  Each is subtracted from the disable list, so the
+        valid names are exactly :data:`_DISABLED_TOOLS` — anything else is
+        either already enabled (making the grant meaningless) or a typo, and
+        both raise.  Matching is exact and case-sensitive: accepting ``"bash"``
+        would leave ``Bash``'s disable flag in argv while the caller believed
+        the tool was enabled.
+    browser:
+        Attach the browser with ``--chrome``.  The browser's own tools arrive
+        with that flag, so ``browser=True`` carrying no ``tools`` is a coherent
+        and supported configuration — a call may drive a browser while ``Bash``
+        and the rest stay disabled.
+    """
+
+    tools: tuple[str, ...] = ()
+    browser: bool = False
+
+    def __post_init__(self) -> None:
+        unknown = tuple(t for t in self.tools if t not in _DISABLED_TOOLS)
+        if unknown:
+            raise ValueError(
+                "unknown tool name(s): "
+                + ", ".join(repr(u) for u in unknown)
+                + ". Valid names, matched exactly: "
+                + ", ".join(_DISABLED_TOOLS)
+                + "."
+            )
+
 
 # Substrings marking usage-limit / subscription-exhaustion in `claude -p` output.
 _EXHAUSTION_MARKERS = (
