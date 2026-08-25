@@ -75,6 +75,22 @@ class Capabilities:
             )
 
 
+def _disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]:
+    """Resolve the tools to disable for one call.
+
+    ``None`` returns :data:`_DISABLED_TOOLS` **itself**, so a caller that passes
+    no capabilities gets argv byte-identical to the build that predates them —
+    by construction, not by care.
+
+    Emission order is always ``_DISABLED_TOOLS`` order, so the caller's tuple
+    order is not observable in argv.
+    """
+    if capabilities is None:
+        return _DISABLED_TOOLS
+    granted = frozenset(capabilities.tools)
+    return tuple(t for t in _DISABLED_TOOLS if t not in granted)
+
+
 # Substrings marking usage-limit / subscription-exhaustion in `claude -p` output.
 _EXHAUSTION_MARKERS = (
     "usage limit",
