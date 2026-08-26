@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1
+
+### Configurable call timeout
+
+`ClaudeCliLLM` accepts an optional `timeout` parameter (seconds), the wall-clock
+ceiling for one `claude -p` subprocess:
+
+```python
+llm = ClaudeCliLLM(timeout=5100)
+```
+
+Defaults to `DEFAULT_TIMEOUT` (600.0) — the value hardcoded through v0.3.0, so
+omitting it changes nothing. It was sized for judgement-shaped calls; an agentic
+caller whose own scheduling grants a call more time (a lease, a queue TTL) passes
+that budget here so the subprocess kill and the scheduler agree. Invalid values
+(zero, negative, non-numeric, bool) raise `ValueError` at construction.
+
+The `_Runner` protocol gains the keyword: `(argv, *, input_text, timeout) -> str`.
+Custom runners must accept it; `_default_runner` keeps its own 600.0 default.
+
+
 ## 0.3.0
 
 ### First-class capabilities

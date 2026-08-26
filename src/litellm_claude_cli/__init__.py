@@ -109,6 +109,12 @@ _EXHAUSTION_MESSAGE = "claude subscription usage limit reached"
 # inline argument, so a large schema is a reachable failure with no file fallback.
 _MAX_ARG_STRLEN = 131072
 
+# Wall-clock ceiling for one `claude -p` subprocess, in seconds. 600 was the
+# hardcoded value through v0.3.0, sized for judgement-shaped calls; agentic
+# callers whose harness grants a longer lease pass their own `timeout=` at
+# construction instead of living with this one.
+DEFAULT_TIMEOUT = 600.0
+
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -197,17 +203,19 @@ def _encode_schema_arg(schema: dict[str, Any]) -> str:
 class _Runner(Protocol):
     """Protocol for the subprocess runner so mypy can type-check keyword-only ``input_text``."""
 
-    def __call__(self, argv: list[str], *, input_text: str | None) -> str: ...  # noqa: E704
+    def __call__(self, argv: list[str], *, input_text: str | None, timeout: float) -> str: ...  # noqa: E704
 
 
-def _default_runner(argv: list[str], *, input_text: str | None) -> str:
-    """Run *argv* as a subprocess, passing *input_text* via stdin."""
+def _default_runner(
+    argv: list[str], *, input_text: str | None, timeout: float = DEFAULT_TIMEOUT
+) -> str:
+    """Run *argv* as a subprocess, passing *input_text* via stdin, killed at *timeout*."""
     proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
         argv,
         input=input_text,
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=timeout,
     )
     if proc.returncode != 0:
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
@@ -412,16 +420,28 @@ class ClaudeCliLLM(CustomLLM):
         What the call may touch.  ``None`` (the default) disables the ten tools
         in :data:`_DISABLED_TOOLS`, producing argv byte-identical to the build
         that predates this parameter.
+    timeout:
+        Wall-clock seconds one ``claude -p`` subprocess may run before it is
+        killed.  Defaults to :data:`DEFAULT_TIMEOUT` (600, the hardcoded value
+        through v0.3.0).  Callers whose own scheduling grants a call more time
+        — a lease, a queue TTL — pass that budget here so the two agree; the
+        subprocess kill is `subprocess.TimeoutExpired`, exactly as before.
+        Must be a positive number; anything else raises ``ValueError`` at
+        construction, not at call time.
     """
 
     def __init__(
         self,
         runner: _Runner = _default_runner,
         capabilities: Capabilities | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         super().__init__()
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+            raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
         self._runner = runner
         self._capabilities = capabilities
+        self._timeout = float(timeout)
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -490,7 +510,7 @@ class ClaudeCliLLM(CustomLLM):
             for t in _disabled_tools_for(self._capabilities):
                 argv += ["--disallowed-tools", t]
 
-            raw = self._runner(argv, input_text=user_prompt)
+            raw = self._runner(argv, input_text=user_prompt, timeout=self._timeout)
         finally:
             try:
                 os.unlink(sys_path)

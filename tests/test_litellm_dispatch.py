@@ -19,7 +19,7 @@ def _run(awaitable_or_value: Any) -> Any:
     return awaitable_or_value
 
 
-def _fake_runner(argv, *, input_text):
+def _fake_runner(argv, *, input_text, timeout=600.0):
     return json.dumps(
         {
             "is_error": False,
@@ -72,7 +72,7 @@ def test_anthropic_messages_dispatches_to_provider():
 _SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
 
 
-def _structured_runner(argv, *, input_text):
+def _structured_runner(argv, *, input_text, timeout=600.0):
     """Records argv, and replies as the CLI does on the structured path."""
     _structured_runner.argv = argv  # type: ignore[attr-defined]
     return json.dumps(
@@ -193,7 +193,7 @@ def test_anthropic_messages_drops_structured_output():
     assert text == '{"a":"x"}'
 
 
-def _exhausted_runner(argv, *, input_text):
+def _exhausted_runner(argv, *, input_text, timeout=600.0):
     return json.dumps(
         {
             "is_error": True,
@@ -254,7 +254,7 @@ def test_completion_wraps_provider_exceptions_in_api_connection_error():
     )
 
 
-def _plain_runner(argv, *, input_text):
+def _plain_runner(argv, *, input_text, timeout=600.0):
     return json.dumps(
         {
             "is_error": False,

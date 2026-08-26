@@ -62,7 +62,7 @@ def _make_llm_with_response(raw_response: str) -> tuple[ClaudeCliLLM, dict[str, 
     """Return a ClaudeCliLLM whose runner returns raw_response and captures call args."""
     captured: dict[str, Any] = {"argv": None, "input_text": None}
 
-    def _runner(argv: list[str], *, input_text: str | None) -> str:
+    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         captured["argv"] = argv
         captured["input_text"] = input_text
         return raw_response
@@ -80,7 +80,7 @@ def test_handler_single_turn_system_via_file_prompt_via_stdin() -> None:
     raw = _fake_json_response(result="found nothing interesting")
     file_content_read: dict[str, str] = {}
 
-    def _capturing_runner(argv: list[str], *, input_text: str | None) -> str:
+    def _capturing_runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         # Read the system-prompt-file while it still exists
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
@@ -143,7 +143,7 @@ def test_large_system_never_appears_as_argv() -> None:
     big_system = "x" * 200_000
     file_content_read: dict[str, Any] = {}
 
-    def _capturing_runner(argv: list[str], *, input_text: str | None) -> str:
+    def _capturing_runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
             file_content_read["content"] = fh.read()
@@ -246,7 +246,7 @@ def test_prefix_stripped_from_model() -> None:
     """The `claude-cli/` prefix is stripped before forwarding to --model."""
     captured: dict[str, Any] = {}
 
-    def _runner(argv: list[str], *, input_text: str | None) -> str:
+    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         captured["argv"] = argv
         # Read the system file to prevent file-not-found after unlink
         idx = argv.index("--system-prompt-file") + 1
@@ -415,7 +415,7 @@ def test_json_schema_reaches_argv() -> None:
     """response_format json_schema is passed as --json-schema <compact JSON>."""
     captured: dict[str, Any] = {}
 
-    def _runner(argv: list[str], *, input_text: str | None) -> str:
+    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         captured["argv"] = argv
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
@@ -495,7 +495,7 @@ def test_encode_schema_arg_rejects_oversized() -> None:
 def test_oversized_schema_raises_before_subprocess() -> None:
     """The guard fires before the runner is invoked — no temp file, no exec."""
 
-    def _runner(argv: list[str], *, input_text: str | None) -> str:
+    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
         raise AssertionError("runner must not be reached when the schema is oversized")
 
     llm = ClaudeCliLLM(runner=_runner)
@@ -798,3 +798,58 @@ def test_disabled_tools_all_reach_argv_as_disallowed() -> None:
         f"expected {len(expected_disabled_tools)} — argv's --disallowed-tools wiring "
         "in _run has drifted from the expected tool list"
     )
+
+
+# ---------------------------------------------------------------------------
+# Timeout: constructor value reaches the runner; default preserved; validated
+# ---------------------------------------------------------------------------
+
+
+def _timeout_capturing_runner_factory() -> tuple[Any, dict[str, Any]]:
+    captured: dict[str, Any] = {}
+
+    def _runner(argv: list[str], *, input_text: str | None, timeout: float) -> str:
+        # No default on `timeout` here, deliberately: this double also proves
+        # the provider PASSES the keyword at all -- a defaulted double would
+        # record 600.0 identically whether the provider passed it or forgot to.
+        captured["timeout"] = timeout
+        return _fake_json_response(result="ok")
+
+    return _runner, captured
+
+
+def test_timeout_default_reaches_runner_as_600() -> None:
+    """Constructing without `timeout` passes DEFAULT_TIMEOUT (600.0) to the runner."""
+    from litellm_claude_cli import DEFAULT_TIMEOUT
+
+    runner, captured = _timeout_capturing_runner_factory()
+    llm = ClaudeCliLLM(runner=runner)
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+    )
+    assert captured["timeout"] == 600.0
+    assert DEFAULT_TIMEOUT == 600.0
+
+
+def test_timeout_constructor_value_reaches_runner() -> None:
+    """An explicit `timeout=` lands on the runner call, coerced to float."""
+    runner, captured = _timeout_capturing_runner_factory()
+    llm = ClaudeCliLLM(runner=runner, timeout=5100)
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+    )
+    assert captured["timeout"] == 5100.0
+    assert isinstance(captured["timeout"], float)
+
+
+def test_timeout_rejected_at_construction_not_call_time() -> None:
+    """Zero, negative, non-numeric and bool timeouts raise ValueError in __init__."""
+    import pytest
+
+    for bad in (0, -5, "600", None, True):
+        with pytest.raises(ValueError):
+            ClaudeCliLLM(timeout=bad)  # type: ignore[arg-type]
