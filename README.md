@@ -153,7 +153,7 @@ caller on that path has no way to detect a truncated `tool_use` turn; use
 
 ## How it works
 
-Each call shells out to `claude -p` with the ten tools in `_DISABLED_TOOLS` disabled (unless `Capabilities` grants some back) so every call is exactly one model turn. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are propagated through to the LiteLLM `Usage` object.
+Each call shells out to `claude -p` with the ten tools in `_DISABLED_TOOLS` disabled (unless `Capabilities` grants some back) and `--disable-slash-commands` on every call, so every call is exactly one model turn. Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool — which sits outside `_DISABLED_TOOLS` — would otherwise be the one remaining way a call could take a second turn. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are propagated through to the LiteLLM `Usage` object.
 
 ## Public API
 

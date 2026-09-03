@@ -6,7 +6,11 @@ This module is self-contained — it has zero external dependencies beyond
 The provider exposes a ``claude-cli/<model>`` namespace via LiteLLM's
 ``custom_provider_map`` mechanism, delegating each call to ``claude -p`` with
 the tools in ``_DISABLED_TOOLS`` disabled by default (an optional
-``Capabilities`` can grant some back) so every call is exactly one model turn.
+``Capabilities`` can grant some back) and ``--disable-slash-commands`` on every
+call, so every call is exactly one model turn.  Skills are disabled
+unconditionally and no capability grants them back — the ``Skill`` tool sits
+outside ``_DISABLED_TOOLS``, so a skill would otherwise be the one remaining
+route to a second turn.
 """
 
 from __future__ import annotations
@@ -81,8 +85,8 @@ def _disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]:
     """Resolve the tools to disable for one call.
 
     ``None`` returns :data:`_DISABLED_TOOLS` **itself**, so a caller that passes
-    no capabilities gets argv byte-identical to the build that predates them —
-    by construction, not by care.
+    no capabilities gets the same ``--disallowed-tools`` flags as the build that
+    predates capabilities — by construction, not by care.
 
     Emission order is always ``_DISABLED_TOOLS`` order, so the caller's tuple
     order is not observable in argv.
@@ -420,8 +424,10 @@ class ClaudeCliLLM(CustomLLM):
         the real subprocess runner.  Override in tests.
     capabilities:
         What the call may touch.  ``None`` (the default) disables the ten tools
-        in :data:`_DISABLED_TOOLS`, producing argv byte-identical to the build
-        that predates this parameter.
+        in :data:`_DISABLED_TOOLS` and grants no browser.  Tools outside that
+        list (``TodoWrite``, ``BashOutput``, MCP tools) are not disabled by it;
+        ``Skill`` is closed separately by ``--disable-slash-commands``, which is
+        fixed argv and not governed by this parameter.
     timeout:
         Wall-clock seconds one ``claude -p`` subprocess may run before it is
         killed.  Defaults to :data:`DEFAULT_TIMEOUT` (600, the hardcoded value
@@ -503,6 +509,12 @@ class ClaudeCliLLM(CustomLLM):
                 "--system-prompt-file",
                 sys_path,
                 "--exclude-dynamic-system-prompt-sections",
+                # Skills are unusable on this path — a one-shot call resolves no
+                # slash command — and their listing is injected into every call's
+                # context.  The flag also closes the `Skill` tool, which sits
+                # outside `_DISABLED_TOOLS` and is the one remaining way a call
+                # could take a second turn.
+                "--disable-slash-commands",
                 "--output-format",
                 "json",
                 "--model",

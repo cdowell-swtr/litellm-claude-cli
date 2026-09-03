@@ -106,3 +106,58 @@ Corrected here. Deliberately left: the two places that QUOTE 0.2.0's retired pre
 history (`_build_response`'s SOUNDNESS comment and the inverted finish_reason test) — those
 are accurate as quotations. Docs only, no behaviour change, no version bump.
 
+#### #0011 · note · LCC5 · 2026-09-02
+Recorded after the fact, by a later task, from the commit alone — not by the author. LCC5
+(configurable call timeout, `ClaudeCliLLM(timeout=...)`) shipped as v0.3.1 in commit 2051607
+on 2026-08-26 with no PLAN item and no log entry; `PLAN.md`'s Done list still ended at LCC4
+and this log at #0010. Found while starting the next task, which reused the free-looking ID
+LCC5 and the free-looking version 0.3.1 — both already taken. The PLAN line added alongside
+this entry states what shipped; the reasoning behind the timeout lives only in that commit
+message.
+
+Also found: v0.3.1 and its commit live on `origin/main`, a branch that does NOT contain
+`origin/master`'s tip and is not contained by it, while `origin/HEAD` still points at
+`master`. A clone that follows the default branch gets a tree without the latest release, and
+`git tag` locally showed v0.3.0 as the newest until `--tags` was fetched explicitly. Left as
+found — resolving the two branch names is Chris's call, not this task's.
+
+#### #0012 · completed · LCC6 · 2026-09-02
+`--disable-slash-commands` added to fixed argv, next to
+`--exclude-dynamic-system-prompt-sections`. Requested by the known consumer (jsp) as a
+per-call context-cost saving: it reported ~1.9k tokens saved per call and a warm
+cache-write floor dropping from 2.7–5k to 1,167, measured on CLI 2.1.235 in minimal
+worker containers.
+
+That saving did not reproduce here and reversed. A/B on CLI 2.1.259, identical argv but
+for the flag, three warm calls per arm and interleaved to rule out ordering: cached
+prefix 9,644 tokens without the flag, 11,877 with it — byte-stable, order-independent,
+and the same direction under `--safe-mode` (7,129 vs 9,773 total prefix). A probe call
+confirmed the flag does what it says — with it, the 28-skill listing and the `Skill`
+tool are gone from context — so the extra ~2.2k is something the CLI adds when skills
+are off, mechanism unidentified.
+
+Resolved by the consumer re-running the interleaved method on both CLIs on one machine:
+the sign flips with CLI version. 2.1.235 saves 1,927 tokens/call (19,673 → 17,746);
+2.1.259 costs 2,195 (24,038 → 26,233), the direction measured here. Neither party was
+wrong; the disagreement was one uncontrolled variable. The consumer keeps the saving on
+its pinned 2.1.235 image and has put a re-run of this A/B on its image-bump checklist,
+since a CLI upgrade can silently invert the rationale.
+
+Shipped anyway, but on a different argument than the one requested, stated in the
+CHANGELOG rather than the cost one: `Skill` sits outside `_DISABLED_TOOLS` (noted in
+#0010 as never disabled), so a skill was the one remaining route by which a call could
+take a second turn. The flag closes it, and the one-model-turn invariant now holds
+against the CLI's full tool surface. Unconditional, matching the consumer's preferred
+shape; no capability grants skills back, since one would reopen exactly that route.
+
+Cross-boundary consequence: argv is no longer byte-identical to the pre-capabilities
+build for `capabilities=None`, retiring a claim 0.3.0 made in three places (the
+`_disabled_tools_for` and `__init__` docstrings, the CHANGELOG). The consumer pins this
+argv shape against a released version, so this needed a version bump — v0.3.2, rebased
+onto `origin/main` and with `uv lock` re-run per [[uv-lock-self-version-drift]]. The
+first cut of this work was built on `master` as LCC5/v0.3.1; both were already taken by
+the unlogged timeout release (#0011), which the consumer's pin evidence surfaced.
+
+Verification: 65 unit tests pass, and the live smoke suite passes against the real CLI
+with the flag in argv — no functional loss on the one-shot path.
+
