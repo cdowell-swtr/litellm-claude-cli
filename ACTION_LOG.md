@@ -161,3 +161,22 @@ the unlogged timeout release (#0011), which the consumer's pin evidence surfaced
 Verification: 65 unit tests pass, and the live smoke suite passes against the real CLI
 with the flag in argv — no functional loss on the one-shot path.
 
+#### #0013 · note · 2026-09-03
+Guards added after v0.3.2 shipped, closing the hole that let v0.3.1 reach a tag and the
+downstream pin without CI ever running on it. Root cause was the workflow trigger, not the
+branch topology: `on: push: branches: [master]` matched nothing when the commit landed on a
+stray branch (never canonical, since deleted), and with no PR the `pull_request` trigger never
+fired either. Widened to
+`branches: ['**']`, with a `concurrency` group so a PR branch matching both triggers keeps
+only its newest run.
+
+Branch protection on `master` requiring the `ci` check was added alongside, but it is the
+weaker of the two: protection defends one branch, and the failure was a push to a branch
+that did not exist yet. The trigger is what actually closes it.
+
+Recorded as committed memory [[ci-runs-on-every-branch]], which also carries the
+generalisable half — when a version or tag appears not to exist, `git fetch --tags` before
+concluding it doesn't. That mistake was caught here only because the consumer pinned a commit
+hash that could not be resolved locally; unaided, this repo would have published a second,
+conflicting v0.3.1.
+

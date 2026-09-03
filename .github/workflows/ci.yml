@@ -1,8 +1,16 @@
 name: ci
 on:
   push:
-    branches: [master]
+    # Every branch, not just master: v0.3.1 was committed to a stray branch
+    # (since deleted), so a master-only filter ran nothing and a release reached
+    # its tag with a failing `ruff format --check`.
+    branches: ['**']
   pull_request:
+
+# A PR branch matches both triggers; keep the newest run per ref and cancel the rest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:

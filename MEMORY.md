@@ -8,3 +8,4 @@ keep it in the native store. Full rule: `memory-convention.md` (MEMORY-conventio
 - [CI docs-layout uses vendored script](_memory/ci-docs-layout-vendored-script.md) — CI runs `hooks/docs-layout-check.sh`, not `pre-commit run docs-layout` (private-repo clone fails in Actions)
 - [Tag after the squash-merge](_memory/release-tag-after-squash-merge.md) — PRs squash-merge, so a tag made on the feature branch points off-`master`; tag `master` after merging, and expect finished branches to report unmerged forever
 - [uv.lock self-version drift](_memory/uv-lock-self-version-drift.md) — `uv.lock` carries this package's own version and goes stale every release; run `uv lock` when bumping
+- [CI runs on every branch](_memory/ci-runs-on-every-branch.md) — the `[master]`-only trigger let v0.3.1 reach a tag and a downstream pin without CI ever running; fetch `--tags` before believing a version doesn't exist
