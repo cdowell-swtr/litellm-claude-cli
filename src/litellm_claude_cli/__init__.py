@@ -203,7 +203,9 @@ def _encode_schema_arg(schema: dict[str, Any]) -> str:
 class _Runner(Protocol):
     """Protocol for the subprocess runner so mypy can type-check keyword-only ``input_text``."""
 
-    def __call__(self, argv: list[str], *, input_text: str | None, timeout: float) -> str: ...  # noqa: E704
+    def __call__(
+        self, argv: list[str], *, input_text: str | None, timeout: float
+    ) -> str: ...  # noqa: E704
 
 
 def _default_runner(
@@ -437,8 +439,14 @@ class ClaudeCliLLM(CustomLLM):
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         super().__init__()
-        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
-            raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
+        if (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or timeout <= 0
+        ):
+            raise ValueError(
+                f"timeout must be a positive number of seconds, got {timeout!r}"
+            )
         self._runner = runner
         self._capabilities = capabilities
         self._timeout = float(timeout)

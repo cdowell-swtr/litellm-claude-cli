@@ -62,7 +62,9 @@ def _make_llm_with_response(raw_response: str) -> tuple[ClaudeCliLLM, dict[str, 
     """Return a ClaudeCliLLM whose runner returns raw_response and captures call args."""
     captured: dict[str, Any] = {"argv": None, "input_text": None}
 
-    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         captured["argv"] = argv
         captured["input_text"] = input_text
         return raw_response
@@ -80,7 +82,9 @@ def test_handler_single_turn_system_via_file_prompt_via_stdin() -> None:
     raw = _fake_json_response(result="found nothing interesting")
     file_content_read: dict[str, str] = {}
 
-    def _capturing_runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _capturing_runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         # Read the system-prompt-file while it still exists
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
@@ -143,7 +147,9 @@ def test_large_system_never_appears_as_argv() -> None:
     big_system = "x" * 200_000
     file_content_read: dict[str, Any] = {}
 
-    def _capturing_runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _capturing_runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
             file_content_read["content"] = fh.read()
@@ -246,7 +252,9 @@ def test_prefix_stripped_from_model() -> None:
     """The `claude-cli/` prefix is stripped before forwarding to --model."""
     captured: dict[str, Any] = {}
 
-    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         captured["argv"] = argv
         # Read the system file to prevent file-not-found after unlink
         idx = argv.index("--system-prompt-file") + 1
@@ -415,7 +423,9 @@ def test_json_schema_reaches_argv() -> None:
     """response_format json_schema is passed as --json-schema <compact JSON>."""
     captured: dict[str, Any] = {}
 
-    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         captured["argv"] = argv
         idx = argv.index("--system-prompt-file") + 1
         with open(argv[idx]) as fh:
@@ -495,7 +505,9 @@ def test_encode_schema_arg_rejects_oversized() -> None:
 def test_oversized_schema_raises_before_subprocess() -> None:
     """The guard fires before the runner is invoked — no temp file, no exec."""
 
-    def _runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         raise AssertionError("runner must not be reached when the schema is oversized")
 
     llm = ClaudeCliLLM(runner=_runner)

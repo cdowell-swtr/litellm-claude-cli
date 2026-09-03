@@ -115,7 +115,9 @@ def _make_llm(
     """Create a ClaudeCliLLM with a captured runner that records argv."""
     captured: dict[str, Any] = {}
 
-    def _fake_runner(argv: list[str], *, input_text: str | None, timeout: float = 600.0) -> str:
+    def _fake_runner(
+        argv: list[str], *, input_text: str | None, timeout: float = 600.0
+    ) -> str:
         captured["argv"] = argv
         return _fake_json_response()
 
