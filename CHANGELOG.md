@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.3.2
+
+### Skills disabled on every call
+
+Every `claude -p` invocation now carries `--disable-slash-commands`. It is fixed argv,
+alongside `--exclude-dynamic-system-prompt-sections` — not a capability.
+
+Two things rest on it. A one-shot `-p` call resolves no slash command, so the skill
+listing the CLI injects into each call's context is dead weight. And the `Skill` tool
+sits outside `_DISABLED_TOOLS` — it was never disabled — so a skill was the one
+remaining route by which a call could take a second turn; this flag closes it and the
+one-model-turn invariant now holds against the CLI's full tool surface.
+
+Callers pass nothing and lose nothing on this path. There is no capability to grant
+skills back: one would reopen the second-turn route the flag exists to close.
+
+**argv is no longer byte-identical to the pre-0.3.0 build** for a caller passing no
+`capabilities`. 0.3.0's byte-identity claim held only against builds that predate this
+flag; the whole-argv literal in `tests/test_capabilities.py` is the current pin.
+
+### Context cost — the sign flips with CLI version
+
+This flag was requested as a context-cost saving, and whether it is one depends on which
+`claude` CLI you run. Interleaved A/B (identical argv but for the flag, warm, byte-stable
+per arm, run on both CLIs on one machine):
+
+| CLI | without flag | with flag | effect |
+|---|---|---|---|
+| 2.1.235 | 19,673 | 17,746 | **saves** 1,927 tokens/call |
+| 2.1.259 | 24,038 | 26,233 | **costs** 2,195 tokens/call |
+
+Measured independently on both sides and reproduced across them. Whatever 2.1.259 adds to
+the prefix when skills are off is real and version-specific; the mechanism is unidentified.
+The flag ships on the one-model-turn argument above, which holds either way. If you are
+adopting it for cost, A/B it on your own CLI version and re-run that A/B on every CLI
+upgrade — the sign is not stable across versions.
+
+### Verified against
+
+`claude` CLI 2.1.259, litellm 1.89.0. The declared floor remains `litellm>=1.88.1`.
+Live smoke suite (`RUN_LIVE_SMOKE=1`) passes against the real CLI with the flag in argv.
+
 ## 0.3.1
 
 ### Configurable call timeout
@@ -19,7 +61,6 @@ that budget here so the subprocess kill and the scheduler agree. Invalid values
 
 The `_Runner` protocol gains the keyword: `(argv, *, input_text, timeout) -> str`.
 Custom runners must accept it; `_default_runner` keeps its own 600.0 default.
-
 
 ## 0.3.0
 

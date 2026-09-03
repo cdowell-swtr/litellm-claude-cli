@@ -142,7 +142,11 @@ def test_capabilities_none_leaves_the_real_argv_untouched() -> None:
     """THE load-bearing default.  A hardcoded whole-argv literal, not a captured
     baseline: a baseline would compare one code path to itself and could only
     pass.  Any change to default argv must be deliberate and update this test in
-    the same commit."""
+    the same commit.
+
+    The known consumer pins its own copy of this argv shape against a released
+    version, so a change here is a cross-boundary change: it needs a version bump
+    on this side before that side can adopt it."""
     llm, captured = _make_llm(None)
     _call(llm)
     argv = captured["argv"]
@@ -153,6 +157,7 @@ def test_capabilities_none_leaves_the_real_argv_untouched() -> None:
         "--system-prompt-file",
         sys_path,
         "--exclude-dynamic-system-prompt-sections",
+        "--disable-slash-commands",
         "--output-format",
         "json",
         "--model",
@@ -193,6 +198,34 @@ def test_empty_capabilities_produces_the_same_argv_as_none() -> None:
         return out
 
     assert _scrub(none_cap["argv"]) == _scrub(empty_cap["argv"])
+
+
+def test_slash_commands_are_disabled_regardless_of_capabilities() -> None:
+    """`--disable-slash-commands` is fixed argv, not a capability.
+
+    It is emitted exactly once on every call — with no capabilities, with tools
+    granted, and with the browser attached.  Two things rest on it: skills are
+    unusable on a one-shot `-p` call, and the `Skill` tool sits OUTSIDE
+    `_DISABLED_TOOLS`, so this flag is what stops a call taking a second turn
+    through a skill.  A capability that granted skills back would break the
+    one-model-turn invariant `_DISABLED_TOOLS` exists to hold, which is why
+    there is no such capability.
+    """
+    for capabilities in (
+        None,
+        Capabilities(),
+        Capabilities(tools=("Read", "Grep")),
+        Capabilities(browser=True),
+        Capabilities(tools=_DISABLED_TOOLS, browser=True),
+    ):
+        llm, captured = _make_llm(capabilities)
+        _call(llm)
+        argv = captured["argv"]
+        assert argv.count("--disable-slash-commands") == 1, (
+            f"--disable-slash-commands emitted {argv.count('--disable-slash-commands')} "
+            f"time(s) for capabilities={capabilities!r}; it must be emitted exactly "
+            "once on every call"
+        )
 
 
 def test_granted_tools_are_absent_from_disallowed_pairs() -> None:
