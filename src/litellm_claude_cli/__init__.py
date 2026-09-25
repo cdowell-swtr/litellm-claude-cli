@@ -5,12 +5,16 @@ This module is self-contained — it has zero external dependencies beyond
 
 The provider exposes a ``claude-cli/<model>`` namespace via LiteLLM's
 ``custom_provider_map`` mechanism, delegating each call to ``claude -p`` with
-the tools in ``_DISABLED_TOOLS`` disabled by default (an optional
-``Capabilities`` can grant some back) and ``--disable-slash-commands`` on every
-call, so every call is exactly one model turn.  Skills are disabled
-unconditionally and no capability grants them back — the ``Skill`` tool sits
-outside ``_DISABLED_TOOLS``, so a skill would otherwise be the one remaining
-route to a second turn.
+``--disable-slash-commands`` on every call.  What else a call may use is set by
+an optional ``Capabilities``:
+
+- ``exclusive=True`` passes an allowlist (``--tools``) and loads no MCP server
+  (``--strict-mcp-config``): the call's tool set is exactly the grant.  This is
+  the only mode that bounds the tool set.
+- Otherwise (the default) the tools in ``_DISABLED_TOOLS`` are denied, less any
+  granted back.  A deny list does not bound the tool set: every CLI release
+  adds tools it does not name, and at least one of them (``Monitor``) runs
+  shell commands.
 """
 
 from __future__ import annotations
@@ -30,7 +34,9 @@ from litellm import CustomLLM, ModelResponse, Usage
 # Constants (ported verbatim from backend.py)
 # ---------------------------------------------------------------------------
 
-# Tools disabled on every call so `claude -p` returns exactly ONE model turn.
+# Tools denied on every non-exclusive call.  NOT a boundary: the CLI ships
+# tools this list does not name (see the module docstring).  It is also the set
+# of names a `Capabilities` may grant, in either mode.
 _DISABLED_TOOLS = (
     "Bash",
     "Read",
@@ -52,32 +58,47 @@ class Capabilities:
     Parameters
     ----------
     tools:
-        Tool names to ALLOW.  Each is subtracted from the disable list, so the
-        valid names are exactly :data:`_DISABLED_TOOLS` — anything else is
-        either already enabled (making the grant meaningless) or a typo, and
-        both raise.  Matching is exact and case-sensitive: accepting ``"bash"``
-        would leave ``Bash``'s disable flag in argv while the caller believed
-        the tool was enabled.
+        Tool names to ALLOW.  The valid names are exactly
+        :data:`_DISABLED_TOOLS` in both modes; anything else raises.  Matching
+        is exact and case-sensitive, because neither mode can tell the caller
+        about a bad name: subtractively, ``"bash"`` would leave ``Bash``'s
+        disable flag in argv, and in an allowlist the CLI silently drops an
+        unknown or wrong-case name, so the tool would be absent while the
+        caller believed it granted.
     browser:
         Attach the browser with ``--chrome``.  The browser's own tools arrive
         with that flag, so ``browser=True`` carrying no ``tools`` is a coherent
         and supported configuration — a call may drive a browser while ``Bash``
-        and the rest stay disabled.
+        and the rest stay disabled.  Not combinable with ``exclusive``.
+    exclusive:
+        ``tools`` is the WHOLE tool set rather than a subtraction from the
+        deny list: argv carries ``--tools <tools joined by ",">`` (in the
+        caller's order) and ``--strict-mcp-config``, and no
+        ``--disallowed-tools``.  ``tools=()`` yields a call with no tools at
+        all.  ``browser=True`` raises: the browser's tools arrive as an MCP
+        server, and whether ``--strict-mcp-config`` lets them load is
+        unmeasured.
     """
 
     tools: tuple[str, ...] = ()
     browser: bool = False
+    exclusive: bool = False
 
     def __post_init__(self) -> None:
         unknown = tuple(t for t in self.tools if t not in _DISABLED_TOOLS)
         if unknown:
             raise ValueError(
-                "tool name(s) not in the disable list (either already enabled, "
-                "or a typo): "
+                "unknown tool name(s): "
                 + ", ".join(repr(u) for u in unknown)
                 + ". Valid names, matched exactly: "
                 + ", ".join(_DISABLED_TOOLS)
                 + "."
+            )
+        if self.exclusive and self.browser:
+            raise ValueError(
+                "browser=True cannot be combined with exclusive=True: the "
+                "browser's tools arrive as an MCP server, and whether "
+                "--strict-mcp-config lets them load is unmeasured."
             )
 
 
@@ -425,7 +446,8 @@ class ClaudeCliLLM(CustomLLM):
     capabilities:
         What the call may touch.  ``None`` (the default) disables the ten tools
         in :data:`_DISABLED_TOOLS` and grants no browser.  Tools outside that
-        list (``TodoWrite``, ``BashOutput``, MCP tools) are not disabled by it;
+        list (``Monitor``, ``TaskCreate``, MCP tools, ...) are not disabled by
+        it; only ``Capabilities(exclusive=True)`` bounds the tool set.
         ``Skill`` is closed separately by ``--disable-slash-commands``, which is
         fixed argv and not governed by this parameter.
     timeout:
@@ -512,8 +534,7 @@ class ClaudeCliLLM(CustomLLM):
                 # Skills are unusable on this path — a one-shot call resolves no
                 # slash command — and their listing is injected into every call's
                 # context.  The flag also closes the `Skill` tool, which sits
-                # outside `_DISABLED_TOOLS` and is the one remaining way a call
-                # could take a second turn.
+                # outside `_DISABLED_TOOLS`.
                 "--disable-slash-commands",
                 "--output-format",
                 "json",
@@ -525,10 +546,19 @@ class ClaudeCliLLM(CustomLLM):
             # The capability block: everything governing what this call may
             # touch.  `--chrome`'s position within argv is not significant to
             # the CLI; it sits here so the block reads as a unit.
-            if self._capabilities is not None and self._capabilities.browser:
-                argv.append("--chrome")
-            for t in _disabled_tools_for(self._capabilities):
-                argv += ["--disallowed-tools", t]
+            if self._capabilities is not None and self._capabilities.exclusive:
+                # An allowlist makes deny flags redundant; emitting them would
+                # re-couple argv to a list known to be incomplete.
+                argv += [
+                    "--tools",
+                    ",".join(self._capabilities.tools),
+                    "--strict-mcp-config",
+                ]
+            else:
+                if self._capabilities is not None and self._capabilities.browser:
+                    argv.append("--chrome")
+                for t in _disabled_tools_for(self._capabilities):
+                    argv += ["--disallowed-tools", t]
 
             raw = self._runner(argv, input_text=user_prompt, timeout=self._timeout)
         finally:

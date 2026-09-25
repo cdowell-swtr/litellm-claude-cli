@@ -287,3 +287,71 @@ def test_chrome_and_grants_compose() -> None:
     values = _disallowed(argv)
     assert "Bash" not in values and "Read" not in values
     assert len(values) == len(_DISABLED_TOOLS) - 2
+
+
+# ---------------------------------------------------------------------------
+# Exclusive mode — `tools` is the whole tool set
+# ---------------------------------------------------------------------------
+
+
+def test_exclusive_defaults_to_false() -> None:
+    assert Capabilities().exclusive is False
+
+
+def test_exclusive_validates_names_like_the_subtractive_mode() -> None:
+    """The CLI silently drops an unknown or wrong-case `--tools` name, so the
+    provider is the only place a typo can surface."""
+    with pytest.raises(ValueError, match="webfetch"):
+        Capabilities(tools=("webfetch",), exclusive=True)
+    with pytest.raises(ValueError, match="Monitor"):
+        Capabilities(tools=("Monitor",), exclusive=True)
+
+
+def test_exclusive_refuses_the_browser() -> None:
+    with pytest.raises(ValueError, match="browser"):
+        Capabilities(exclusive=True, browser=True)
+
+
+def test_exclusive_web_grant_argv() -> None:
+    """The argv the research consumer asserts: the capability block is exactly
+    `--tools WebSearch,WebFetch --strict-mcp-config`, in the caller's order."""
+    llm, captured = _make_llm(
+        Capabilities(tools=("WebSearch", "WebFetch"), exclusive=True)
+    )
+    _call(llm)
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 2 :] == [
+        "--tools",
+        "WebSearch,WebFetch",
+        "--strict-mcp-config",
+    ]
+
+
+def test_exclusive_empty_grant_is_the_literal_empty_string() -> None:
+    """`--tools ""` is what yields no tools; omitting the flag would yield all."""
+    llm, captured = _make_llm(Capabilities(exclusive=True))
+    _call(llm)
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 2 :] == [
+        "--tools",
+        "",
+        "--strict-mcp-config",
+    ]
+
+
+def test_exclusive_emits_no_deny_flags_and_keeps_fixed_argv() -> None:
+    llm, captured = _make_llm(Capabilities(tools=("Read",), exclusive=True))
+    _call(llm)
+    argv = captured["argv"]
+    assert "--disallowed-tools" not in argv
+    assert "--chrome" not in argv
+    assert argv.count("--disable-slash-commands") == 1
+    assert argv.count("--tools") == 1
+
+
+def test_non_exclusive_never_emits_allowlist_flags() -> None:
+    for capabilities in (None, Capabilities(tools=("Read",), browser=True)):
+        llm, captured = _make_llm(capabilities)
+        _call(llm)
+        assert "--tools" not in captured["argv"]
+        assert "--strict-mcp-config" not in captured["argv"]

@@ -6,7 +6,10 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 
 ## Next
 
-_(nothing queued)_
+- [ ] LCC7 — v0.4.0 per the jsp brief `2026-09-25-litellm-claude-cli-allowlist-and-model-usage`:
+  - [x] exclusive allowlist mode (`Capabilities.exclusive`), live-proven: init tool set == grant
+  - [ ] usage counts every model in `modelUsage` — shape awaiting ruling (brief's (a)/(b))
+  - [ ] CHANGELOG, version bump, `uv lock`, tag after squash-merge
 
 ## Done
 - [x] LCC6 — `--disable-slash-commands` on every call: fixed argv, skills closed (v0.3.2) → log:#0012

@@ -145,3 +145,59 @@ def test_live_granted_tool_with_schema_finishes_as_stop(tmp_path, monkeypatch):
     assert resp.choices[0].finish_reason == "stop"
     structured = resp.choices[0].message.provider_specific_fields["structured_output"]
     assert "colour" in structured
+
+
+def _init_capturing_runner(seen: dict[str, Any]) -> Any:
+    """A real runner that swaps `--output-format json` for `stream-json --verbose`
+    so the CLI's `system/init` event — the effective tool set — is observable.
+
+    Everything else in argv is the provider's own.  The stream's `result` event
+    is the payload `--output-format json` would have printed, so it is handed
+    back for `_build_response` to parse as usual.
+    """
+    import subprocess
+
+    def _run(argv: list[str], *, input_text: str | None, timeout: float) -> str:
+        argv = list(argv)
+        i = argv.index("--output-format")
+        argv[i : i + 2] = ["--output-format", "stream-json", "--verbose"]
+        seen["argv"] = argv
+        proc = subprocess.run(  # noqa: S603
+            argv, input=input_text, capture_output=True, text=True, timeout=timeout
+        )
+        result = None
+        for line in proc.stdout.splitlines():
+            event = json.loads(line)
+            if event.get("type") == "system" and event.get("subtype") == "init":
+                seen["tools"] = event["tools"]
+                seen["mcp_servers"] = event["mcp_servers"]
+            elif event.get("type") == "result":
+                result = line
+        assert result is not None, proc.stdout + proc.stderr
+        return result
+
+    return _run
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_LIVE_SMOKE") != "1" or shutil.which("claude") is None,
+    reason="live: set RUN_LIVE_SMOKE=1 with the `claude` CLI on PATH",
+)
+@pytest.mark.parametrize("grant", [("WebSearch", "WebFetch"), ()])
+def test_live_exclusive_tool_set_equals_the_grant(grant: tuple[str, ...]) -> None:
+    """The allowlist's claim, checked where it lives: the CLI's own init event
+    reports exactly the granted tools and no MCP server."""
+    from litellm_claude_cli import Capabilities
+
+    seen: dict[str, Any] = {}
+    llm = ClaudeCliLLM(
+        runner=_init_capturing_runner(seen),
+        capabilities=Capabilities(tools=grant, exclusive=True),
+    )
+    llm.completion(
+        model="claude-cli/claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+        optional_params={},
+    )
+    assert sorted(seen["tools"]) == sorted(grant)
+    assert seen["mcp_servers"] == []
