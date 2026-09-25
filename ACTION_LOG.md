@@ -180,3 +180,28 @@ concluding it doesn't. That mistake was caught here only because the consumer pi
 hash that could not be resolved locally; unaided, this repo would have published a second,
 conflicting v0.3.1.
 
+#### #0014 · completed · LCC7 · 2026-09-24
+v0.4.0, from jsp's brief `2026-09-25-litellm-claude-cli-allowlist-and-model-usage`
+(materials lane). Two changes.
+
+`Capabilities(exclusive=True)` emits `--tools <grant> --strict-mcp-config` and no deny
+flags. The brief's evidence is that the deny list never bounded the tool set: CLI 2.1.235
+exposes 23 tools under it, and `Monitor` executed a shell command with
+`capabilities=None`. The docs that claimed one model turn were corrected. Default argv is
+unchanged, per the brief; moving jsp's kinds off it is their B46.
+
+Measured here (CLI 2.1.282): the CLI silently drops unknown and wrong-case `--tools`
+names. That makes the exact-match `ValueError` against the ten names load-bearing, not
+defensive. `browser`+`exclusive` is refused rather than proven, since no consumer needs it.
+
+Usage is summed across `modelUsage`, and the raw dict goes in
+`provider_specific_fields["model_usage"]`. This is option (c), ruled by the jsp
+orchestrator over the brief's (a) sum and (b) expose, on the premiss that jsp counts
+tokens against a quota and does not price them. `thinkingTokens` is excluded because
+`outputTokens` already includes it (measured: the difference was the reply length on
+three calls).
+
+Verification: 82 unit tests pass. The live suite passes 6/6, including the init-event
+tool-set equality for both grants and a sonnet WebSearch call whose recorded input equals
+the sum of both models' `inputTokens`.
+

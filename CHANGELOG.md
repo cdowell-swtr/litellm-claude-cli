@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.4.0
+
+### Exclusive mode — an allowlist that bounds the tool set
+
+`Capabilities` gains `exclusive: bool = False`. With `exclusive=True`, `tools` is the
+call's whole tool set:
+
+```python
+Capabilities(tools=("WebSearch", "WebFetch"), exclusive=True)  # exactly these two
+Capabilities(exclusive=True)                                   # no tools at all
+```
+
+argv carries `--tools <tools joined by ",">` in the caller's order, plus
+`--strict-mcp-config`, and no `--disallowed-tools`. `tools=()` becomes `--tools ""`.
+
+The deny list never bounded the tool set. `_DISABLED_TOOLS` names ten tools, and the CLI
+ships others it does not name (`Monitor`, `CronCreate`, `TaskCreate`, `SendMessage`,
+`Workflow`, …), with more in every release. `Monitor` runs shell commands, and it has
+been observed doing so under `capabilities=None`. The docs no longer claim the deny list
+makes a call one model turn.
+
+- **Names:** the valid names are the same ten, matched exactly. The CLI silently drops
+  an unknown or wrong-case `--tools` name (`--tools webfetch` yields no tools), so the
+  provider's `ValueError` is the only place a typo surfaces.
+- **Browser:** `browser=True` with `exclusive=True` raises `ValueError`. The browser's
+  tools arrive as an MCP server, and whether `--strict-mcp-config` admits them is
+  unmeasured.
+- **Default:** `exclusive=False` leaves argv byte-identical to 0.3.2.
+
+### Usage counts every model
+
+`Usage` is now summed across every entry in the payload's `modelUsage`. Top-level `usage`
+is used only when `modelUsage` is absent or empty.
+
+- **Why:** top-level `usage` covers the call's own model alone. WebSearch and WebFetch
+  run on a second model (haiku) that only `modelUsage` reports. In a measured sonnet
+  research call, that second model's input exceeded the entire recorded spend, and none
+  of it reached the caller.
+- **The sum:** `prompt_tokens` = Σ `inputTokens`, `completion_tokens` = Σ
+  `outputTokens`, and the two cache fields likewise. Where the two sources disagree for
+  the call's own model, the per-model figure wins, because it is the breakdown the
+  top-level figure summarises.
+- **Mixed models:** the sum mixes models, so it cannot be priced at any one model's
+  rate.
+- **Per-model figures:** the raw `modelUsage` dict is attached verbatim as
+  `provider_specific_fields["model_usage"]`, for callers that attribute spend per model.
+  It is absent when the payload carries none.
+- **Thinking tokens are not added.** On three haiku calls, `outputTokens` minus
+  `thinkingTokens` was 15–16, the length of the one-word reply, so `outputTokens`
+  already includes thinking.
+
+For a tool-using call, `Usage` now reports more than 0.3.2 did for the same call. For a
+call that uses no second model, it is unchanged.
+
+
+### Verified against
+
+`claude` CLI 2.1.282. A live test reads the CLI's `system/init` event for the provider's
+own argv. For `("WebSearch", "WebFetch")` and for `()`, the effective tool set equals the
+grant and `mcp_servers` is `[]`. A live sonnet call granted `WebSearch` reports two
+models in `modelUsage`, and the recorded `prompt_tokens` equals their summed
+`inputTokens`.
+
 ## 0.3.2
 
 ### Skills disabled on every call

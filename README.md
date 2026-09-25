@@ -103,9 +103,9 @@ or call `ClaudeCliLLM` directly.
 ## Capabilities
 
 By default, the ten tools in `_DISABLED_TOOLS` (`Bash`, `Read`, `Edit`, `Write`,
-`Grep`, `Glob`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`) are disabled so
-every call is exactly one model turn. Pass an optional `Capabilities` to
-`ClaudeCliLLM` to grant specific tools and/or attach the browser:
+`Grep`, `Glob`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`) are disabled. Pass an
+optional `Capabilities` to `ClaudeCliLLM` to grant specific tools and/or attach the
+browser:
 
 ```python
 from litellm_claude_cli import Capabilities, ClaudeCliLLM
@@ -121,6 +121,28 @@ all.
 
 Omitting `capabilities` disables all ten listed tools, as before.
 
+**The deny list is not a boundary.** The CLI ships tools `_DISABLED_TOOLS` does not
+name (`Monitor`, `CronCreate`, `TaskCreate`, `SendMessage`, `Workflow`, …), and every
+release adds more. `Monitor` runs shell commands: a model asked to use it will, under
+`capabilities=None`. To bound what a call can touch, use exclusive mode.
+
+### Exclusive mode — an allowlist
+
+```python
+Capabilities(tools=("WebSearch", "WebFetch"), exclusive=True)  # exactly these two
+Capabilities(exclusive=True)                                   # no tools at all
+```
+
+With `exclusive=True`, `tools` is the call's **whole** tool set: argv carries
+`--tools WebSearch,WebFetch` (the caller's order) and `--strict-mcp-config`, and no
+`--disallowed-tools`. `tools=()` becomes `--tools ""`, which the CLI reads as no tools.
+The valid names are the same ten, validated the same way — this matters more here,
+because the CLI silently drops an unknown or wrong-case name from `--tools`, leaving
+the tool absent while the caller believes it granted. `browser=True` with
+`exclusive=True` raises `ValueError`: the browser's tools arrive as an MCP server, and
+whether `--strict-mcp-config` admits them is unmeasured. The default,
+`exclusive=False`, leaves argv exactly as before.
+
 **`register()` takes no capabilities.** `register()` always installs a plain
 `ClaudeCliLLM()` with `capabilities=None` — a process-global capability grant
 would contradict the deliberately per-instance design. A caller that needs
@@ -132,8 +154,8 @@ litellm.custom_provider_map = [
 ]
 ```
 
-**Granting a tool is not the same as permitting it.** `tools` only removes
-that name's `--disallowed-tools` flag; argv carries no `--permission-mode` and
+**Granting a tool is not the same as permitting it.** Outside exclusive mode,
+`tools` only removes that name's `--disallowed-tools` flag; in either mode argv carries no `--permission-mode` and
 no `--allowed-tools`, so the CLI's own permission layer still gates tool use
 in headless `-p`. Only `Read` has been proven to work end-to-end this way —
 `Bash`, `Edit`, and `Write` may still be refused. A refusal surfaces as
@@ -153,7 +175,7 @@ caller on that path has no way to detect a truncated `tool_use` turn; use
 
 ## How it works
 
-Each call shells out to `claude -p` with the ten tools in `_DISABLED_TOOLS` disabled (unless `Capabilities` grants some back) and `--disable-slash-commands` on every call, so every call is exactly one model turn. Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool — which sits outside `_DISABLED_TOOLS` — would otherwise be the one remaining way a call could take a second turn. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are propagated through to the LiteLLM `Usage` object.
+Each call shells out to `claude -p` with `--disable-slash-commands`, plus either an allowlist (`--tools … --strict-mcp-config`, in exclusive mode) or the ten tools in `_DISABLED_TOOLS` denied (unless `Capabilities` grants some back). Only the allowlist bounds the tool set; see [Capabilities](#capabilities). Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool sits outside `_DISABLED_TOOLS`. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). `Usage` sums every model the call drove: the CLI's per-model `modelUsage` (a web tool runs on a second model that top-level `usage` omits), falling back to top-level `usage` when absent. Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are carried the same way. The raw per-model breakdown is in `provider_specific_fields["model_usage"]`.
 
 ## Public API
 
