@@ -248,6 +248,91 @@ def test_usage_cache_fields_populated() -> None:
     assert usage.cache_creation_input_tokens == 5
 
 
+def _payload_with_model_usage(model_usage: Any) -> str:
+    """A payload whose top-level `usage` is the call's own model only — the CLI's
+    real shape when a tool drives a second model."""
+    payload = json.loads(
+        _fake_json_response(
+            input_tokens=10,
+            output_tokens=4451,
+            cache_read_input_tokens=23069,
+            cache_creation_input_tokens=9636,
+        )
+    )
+    payload["modelUsage"] = model_usage
+    return json.dumps(payload)
+
+
+_TWO_MODELS = {
+    "claude-sonnet-5": {
+        "inputTokens": 10,
+        "outputTokens": 4451,
+        "cacheReadInputTokens": 23069,
+        "cacheCreationInputTokens": 9636,
+        "thinkingTokens": 900,
+        "costUSD": 0.1,
+    },
+    "claude-haiku-4-5": {
+        "inputTokens": 57071,
+        "outputTokens": 2842,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 0,
+        "webSearchRequests": 4,
+    },
+}
+
+
+def test_usage_sums_every_model_in_model_usage() -> None:
+    """Top-level `usage` is the call's own model alone; a web tool's model
+    appears only in `modelUsage`, and its spend must reach the caller."""
+    usage = _build_response(_payload_with_model_usage(_TWO_MODELS)).usage
+    assert usage.prompt_tokens == 10 + 57071
+    assert usage.completion_tokens == 4451 + 2842
+    assert usage.total_tokens == 10 + 57071 + 4451 + 2842
+    assert usage.cache_read_input_tokens == 23069
+    assert usage.cache_creation_input_tokens == 9636
+
+
+def test_usage_sum_ignores_thinking_tokens() -> None:
+    """`outputTokens` already includes thinking; adding it would double-count."""
+    one = {"m": {"inputTokens": 1, "outputTokens": 300, "thinkingTokens": 250}}
+    assert (
+        _build_response(_payload_with_model_usage(one)).usage.completion_tokens == 300
+    )
+
+
+def test_model_usage_wins_over_top_level_usage_when_they_disagree() -> None:
+    one = {"m": {"inputTokens": 7, "outputTokens": 3}}
+    usage = _build_response(_payload_with_model_usage(one)).usage
+    assert usage.prompt_tokens == 7
+    assert usage.completion_tokens == 3
+    assert usage.cache_read_input_tokens == 0
+
+
+@pytest.mark.parametrize("model_usage", [_MISSING, None, {}])
+def test_usage_falls_back_to_top_level_without_model_usage(model_usage: Any) -> None:
+    payload = json.loads(_fake_json_response(input_tokens=100, output_tokens=20))
+    if model_usage is not _MISSING:
+        payload["modelUsage"] = model_usage
+    mr = _build_response(json.dumps(payload))
+    assert mr.usage.prompt_tokens == 100
+    assert mr.usage.completion_tokens == 20
+    assert "model_usage" not in mr.choices[0].message.provider_specific_fields
+
+
+def test_raw_model_usage_is_exposed_verbatim() -> None:
+    llm, _ = _make_llm_with_response(_payload_with_model_usage(_TWO_MODELS))
+    resp = llm.completion(
+        model="claude-cli/claude-sonnet-5",
+        messages=[{"role": "user", "content": "x"}],
+        optional_params={},
+        model_response=litellm.ModelResponse(),
+    )
+    psf = resp.choices[0].message.provider_specific_fields
+    assert psf["model_usage"] == _TWO_MODELS
+    assert resp.usage.prompt_tokens == 10 + 57071
+
+
 def test_prefix_stripped_from_model() -> None:
     """The `claude-cli/` prefix is stripped before forwarding to --model."""
     captured: dict[str, Any] = {}

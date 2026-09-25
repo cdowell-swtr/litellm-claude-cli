@@ -6,12 +6,10 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 
 ## Next
 
-- [ ] LCC7 — v0.4.0 per the jsp brief `2026-09-25-litellm-claude-cli-allowlist-and-model-usage`:
-  - [x] exclusive allowlist mode (`Capabilities.exclusive`), live-proven: init tool set == grant
-  - [ ] usage counts every model in `modelUsage` — shape awaiting ruling (brief's (a)/(b))
-  - [ ] CHANGELOG, version bump, `uv lock`, tag after squash-merge
+_(nothing queued)_
 
 ## Done
+- [x] LCC7 — Exclusive allowlist mode + usage summed across `modelUsage`, raw dict exposed (v0.4.0) → log:#0014
 - [x] LCC6 — `--disable-slash-commands` on every call: fixed argv, skills closed (v0.3.2) → log:#0012
 - [x] LCC5 — Configurable call timeout: `timeout=` on `ClaudeCliLLM`, `_Runner` gains the keyword (v0.3.1) → log:#0011
 - [x] LCC4 — First-class capabilities: `Capabilities` param, argv built from it, `tool_use`→`stop` re-keyed (v0.3.0) → log:#0009

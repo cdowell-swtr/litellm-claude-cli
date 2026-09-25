@@ -369,12 +369,26 @@ def _build_response(raw: str) -> ModelResponse:
     # A null structured_output is treated exactly as an absent one: the documented
     # contract is that the attribute is absent, never present-and-None.
     structured = payload.get("structured_output")
-    u = payload.get("usage", {}) or {}
-
-    cache_read = u.get("cache_read_input_tokens", 0) or 0
-    cache_creation = u.get("cache_creation_input_tokens", 0) or 0
-    prompt_toks = u.get("input_tokens", 0) or 0
-    completion_toks = u.get("output_tokens", 0) or 0
+    # Top-level `usage` is the call's own model alone.  A tool that drives a
+    # second model (WebSearch/WebFetch run on haiku) reports only in
+    # `modelUsage`, so that is summed when present — its entry for the call's
+    # own model is the breakdown top-level `usage` summarises, so it wins.
+    # `thinkingTokens` is not summed: measured, `outputTokens` already
+    # includes it.
+    model_usage = payload.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        entries = [e for e in model_usage.values() if isinstance(e, dict)]
+        prompt_toks = sum(e.get("inputTokens", 0) or 0 for e in entries)
+        completion_toks = sum(e.get("outputTokens", 0) or 0 for e in entries)
+        cache_read = sum(e.get("cacheReadInputTokens", 0) or 0 for e in entries)
+        cache_creation = sum(e.get("cacheCreationInputTokens", 0) or 0 for e in entries)
+    else:
+        model_usage = None
+        u = payload.get("usage", {}) or {}
+        cache_read = u.get("cache_read_input_tokens", 0) or 0
+        cache_creation = u.get("cache_creation_input_tokens", 0) or 0
+        prompt_toks = u.get("input_tokens", 0) or 0
+        completion_toks = u.get("output_tokens", 0) or 0
     # litellm's Usage accepts extra **params for vendor-specific fields.
     usage = Usage(  # type: ignore[call-arg]
         prompt_tokens=prompt_toks,
@@ -411,6 +425,10 @@ def _build_response(raw: str) -> ModelResponse:
     provider_specific_fields: dict[str, Any] = {"stop_reason": raw_stop_reason}
     if structured is not None:
         provider_specific_fields["structured_output"] = structured
+    # The per-model breakdown behind `usage`, verbatim, for a caller that
+    # attributes spend per model rather than taking the sum.
+    if model_usage is not None:
+        provider_specific_fields["model_usage"] = model_usage
 
     mr = ModelResponse(
         choices=[

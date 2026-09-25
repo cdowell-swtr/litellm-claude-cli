@@ -201,3 +201,33 @@ def test_live_exclusive_tool_set_equals_the_grant(grant: tuple[str, ...]) -> Non
     )
     assert sorted(seen["tools"]) == sorted(grant)
     assert seen["mcp_servers"] == []
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_LIVE_SMOKE") != "1" or shutil.which("claude") is None,
+    reason="live: set RUN_LIVE_SMOKE=1 with the `claude` CLI on PATH",
+)
+def test_live_web_search_usage_counts_the_web_model() -> None:
+    """WebSearch runs on a second model that only `modelUsage` reports.  The
+    recorded input must include it, not just the call's own model's."""
+    from litellm_claude_cli import Capabilities
+
+    llm = ClaudeCliLLM(capabilities=Capabilities(tools=("WebSearch",), exclusive=True))
+    resp = llm.completion(
+        model="claude-cli/sonnet",
+        messages=[
+            {
+                "role": "user",
+                "content": "Use WebSearch once to find the current stable Python "
+                "release, then answer in one line.",
+            }
+        ],
+        optional_params={},
+    )
+    model_usage = resp.choices[0].message.provider_specific_fields["model_usage"]
+    assert len(model_usage) >= 2, model_usage
+    assert resp.usage.prompt_tokens == sum(
+        m["inputTokens"] for m in model_usage.values()
+    )
+    own = max(model_usage.values(), key=lambda m: m["outputTokens"])
+    assert resp.usage.prompt_tokens > own["inputTokens"]

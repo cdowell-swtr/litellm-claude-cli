@@ -1,6 +1,6 @@
 [project]
 name = "litellm-claude-cli"
-version = "0.3.2"
+version = "0.4.0"
 description = "A LiteLLM CustomLLM provider backed by the local `claude` CLI subscription."
 readme = "README.md"
 requires-python = ">=3.12"
