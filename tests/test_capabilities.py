@@ -185,6 +185,70 @@ def test_capabilities_none_leaves_the_real_argv_untouched() -> None:
     ]
 
 
+def test_browser_only_mode_full_argv_pinned() -> None:
+    """LCC8: byte-identity pin for `browser=True` (no exclusive) — this mode's
+    argv must not move a hair when browser+exclusive is introduced."""
+    llm, captured = _make_llm(Capabilities(tools=("Bash",), browser=True))
+    _call(llm)
+    argv = captured["argv"]
+    sys_path = argv[argv.index("--system-prompt-file") + 1]
+    assert argv == [
+        "claude",
+        "-p",
+        "--system-prompt-file",
+        sys_path,
+        "--exclude-dynamic-system-prompt-sections",
+        "--disable-slash-commands",
+        "--output-format",
+        "json",
+        "--model",
+        "claude-haiku-4-5-20251001",
+        "--chrome",
+        "--disallowed-tools",
+        "Read",
+        "--disallowed-tools",
+        "Edit",
+        "--disallowed-tools",
+        "Write",
+        "--disallowed-tools",
+        "Grep",
+        "--disallowed-tools",
+        "Glob",
+        "--disallowed-tools",
+        "WebFetch",
+        "--disallowed-tools",
+        "WebSearch",
+        "--disallowed-tools",
+        "Task",
+        "--disallowed-tools",
+        "NotebookEdit",
+    ]
+
+
+def test_exclusive_only_mode_full_argv_pinned() -> None:
+    """LCC8: byte-identity pin for `exclusive=True` (no browser) — this mode's
+    argv must not move a hair when browser+exclusive is introduced."""
+    llm, captured = _make_llm(Capabilities(tools=("Read", "Grep"), exclusive=True))
+    _call(llm)
+    argv = captured["argv"]
+    sys_path = argv[argv.index("--system-prompt-file") + 1]
+    assert argv == [
+        "claude",
+        "-p",
+        "--system-prompt-file",
+        sys_path,
+        "--exclude-dynamic-system-prompt-sections",
+        "--disable-slash-commands",
+        "--output-format",
+        "json",
+        "--model",
+        "claude-haiku-4-5-20251001",
+        "--tools",
+        "Read,Grep",
+        "--strict-mcp-config",
+    ]
+
+
 def test_empty_capabilities_produces_the_same_argv_as_none() -> None:
     none_llm, none_cap = _make_llm(None)
     _call(none_llm)
@@ -307,9 +371,15 @@ def test_exclusive_validates_names_like_the_subtractive_mode() -> None:
         Capabilities(tools=("Monitor",), exclusive=True)
 
 
-def test_exclusive_refuses_the_browser() -> None:
-    with pytest.raises(ValueError, match="browser"):
-        Capabilities(exclusive=True, browser=True)
+def test_exclusive_and_browser_together_is_now_supported() -> None:
+    """LCC8: browser+exclusive is a supported mode (seam v218 §C), proven by
+    the live spike and the recorded stream fixture in
+    `test_browser_exclusive.py`. This used to raise; that refusal was refused
+    rather than proven, and it no longer applies."""
+    cap = Capabilities(exclusive=True, browser=True)
+    assert cap.exclusive is True
+    assert cap.browser is True
+    assert cap.tools == ()
 
 
 def test_exclusive_web_grant_argv() -> None:
