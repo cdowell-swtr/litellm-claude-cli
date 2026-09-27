@@ -9,6 +9,7 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 _(nothing queued)_
 
 ## Done
+- [x] LCC8 — Browser+exclusive with an MCP permission-prompt approver: `--chrome` under an allowlist, fail-closed `system/init` checks, streamed result parsing (v0.5.0) → log:#0015
 - [x] LCC7 — Exclusive allowlist mode + usage summed across `modelUsage`, raw dict exposed (v0.4.0) → log:#0014
 - [x] LCC6 — `--disable-slash-commands` on every call: fixed argv, skills closed (v0.3.2) → log:#0012
 - [x] LCC5 — Configurable call timeout: `timeout=` on `ClaudeCliLLM`, `_Runner` gains the keyword (v0.3.1) → log:#0011

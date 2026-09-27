@@ -138,10 +138,53 @@ With `exclusive=True`, `tools` is the call's **whole** tool set: argv carries
 `--disallowed-tools`. `tools=()` becomes `--tools ""`, which the CLI reads as no tools.
 The valid names are the same ten, validated the same way — this matters more here,
 because the CLI silently drops an unknown or wrong-case name from `--tools`, leaving
-the tool absent while the caller believes it granted. `browser=True` with
-`exclusive=True` raises `ValueError`: the browser's tools arrive as an MCP server, and
-whether `--strict-mcp-config` admits them is unmeasured. The default,
-`exclusive=False`, leaves argv exactly as before.
+the tool absent while the caller believes it granted. The default, `exclusive=False`,
+leaves argv exactly as before.
+
+### Browser+exclusive mode — `--chrome` under a bounded allowlist
+
+`exclusive=True` combined with `browser=True` attaches Claude in Chrome as a bounded
+allowlist, optionally with an MCP permission-prompt approver:
+
+```python
+from litellm_claude_cli import Capabilities, McpServer
+
+llm = ClaudeCliLLM(
+    capabilities=Capabilities(
+        exclusive=True,
+        browser=True,
+        tools=("mcp__claude-in-chrome__navigate", "mcp__claude-in-chrome__select_browser"),
+        mcp_servers=(McpServer(name="approver", command="python3", args=("-m", "my_approver")),),
+        permission_prompt_tool="mcp__approver__approve",
+    )
+)
+```
+
+In this mode `tools` is validated against `CLAUDE_IN_CHROME_TOOLS` (the 22
+`mcp__claude-in-chrome__*` tools the browser offers), not `_DISABLED_TOOLS`. argv
+carries `--chrome`, then `--mcp-config <json>` (only if `mcp_servers` is set), then
+`--strict-mcp-config --tools ""`, then `--permission-mode default` UNCONDITIONALLY —
+whether or not a prompt tool is set, so a settings file's own default can never take
+over — then `--permission-prompt-tool <name>` only if `permission_prompt_tool` is set
+(never `--permission-mode bypassPermissions`), then `--disallowed-tools <t>` for every
+`CLAUDE_IN_CHROME_TOOLS` entry not granted. The call runs with `--output-format
+stream-json --verbose` rather than `json`.
+
+`mcp_servers` and `permission_prompt_tool` are valid ONLY in this mode — set either one
+outside it and construction raises `ValueError`. A `permission_prompt_tool`'s
+`mcp__<name>__` prefix must name a server present in `mcp_servers`; server names must
+be unique and match `^[a-z][a-z0-9_]*$`.
+
+**The guarantee: no result is ever accepted without a `system/init` event that passed
+both checks, and a failing init is killed as soon as it is read** — not "before the
+first model turn": the CLI may already have dispatched a request, or a tool call, by the
+time the kill lands. The checks: the offered tool set must equal exactly `set(tools)`
+(the permission-prompt tool, if any, is never offered to the model itself), and
+`permissionMode` must always be `"default"` — unconditionally, whether or not a prompt
+tool is set, so a settings file's own default (including `bypassPermissions`) can never
+take over a call in this mode. This is the outer fence when the browser is logged into
+real accounts: it exists so a CLI change, or a call with no approver, can't silently
+widen the tool set or fall back to a bypass mode that would never consult one.
 
 **`register()` takes no capabilities.** `register()` always installs a plain
 `ClaudeCliLLM()` with `capabilities=None` — a process-global capability grant
@@ -175,11 +218,13 @@ caller on that path has no way to detect a truncated `tool_use` turn; use
 
 ## How it works
 
-Each call shells out to `claude -p` with `--disable-slash-commands`, plus either an allowlist (`--tools … --strict-mcp-config`, in exclusive mode) or the ten tools in `_DISABLED_TOOLS` denied (unless `Capabilities` grants some back). Only the allowlist bounds the tool set; see [Capabilities](#capabilities). Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool sits outside `_DISABLED_TOOLS`. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). `Usage` sums every model the call drove: the CLI's per-model `modelUsage` (a web tool runs on a second model that top-level `usage` omits), falling back to top-level `usage` when absent. Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are carried the same way. The raw per-model breakdown is in `provider_specific_fields["model_usage"]`.
+Each call shells out to `claude -p` with `--disable-slash-commands`, plus either an allowlist (`--tools … --strict-mcp-config`, in exclusive mode; `--chrome … --tools "" --disallowed-tools …` in browser+exclusive mode) or the ten tools in `_DISABLED_TOOLS` denied (unless `Capabilities` grants some back). Only an allowlist bounds the tool set; see [Capabilities](#capabilities). Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool sits outside `_DISABLED_TOOLS`. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Browser+exclusive mode runs with `--output-format stream-json --verbose` instead of `json`, reading the stream line by line and killing the process the moment a `system/init` event fails either check, or any other stream failure occurs — every other mode still runs to completion and parses `--output-format json`. `Usage` sums every model the call drove: the CLI's per-model `modelUsage` (a web tool runs on a second model that top-level `usage` omits), falling back to top-level `usage` when absent. Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are carried the same way. The raw per-model breakdown is in `provider_specific_fields["model_usage"]`.
 
 ## Public API
 
-- `ClaudeCliLLM` — the `CustomLLM` subclass; accepts optional `runner` (for testing) and `capabilities` arguments
-- `Capabilities` — `tools`/`browser` grants for a `ClaudeCliLLM` instance; see [Capabilities](#capabilities) above
+- `ClaudeCliLLM` — the `CustomLLM` subclass; accepts optional `runner`/`stream_runner` (for testing) and `capabilities` arguments
+- `Capabilities` — `tools`/`browser`/`exclusive`/`mcp_servers`/`permission_prompt_tool` grants for a `ClaudeCliLLM` instance; see [Capabilities](#capabilities) above
+- `McpServer` — one MCP server (`name`, `command`, `args`) for `Capabilities.mcp_servers`, valid only in browser+exclusive mode
+- `CLAUDE_IN_CHROME_TOOLS` — the pinned 22-name `mcp__claude-in-chrome__*` inventory `tools` is validated against in browser+exclusive mode
 - `ClaudeExhausted` — raised when `claude -p` signals subscription exhaustion; carries an optional `reset_hint`
 - `register()` — idempotently registers `ClaudeCliLLM` under the `claude-cli` provider

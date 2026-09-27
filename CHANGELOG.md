@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.5.0
+
+### Browser+exclusive mode — `--chrome` under a bounded allowlist, with an MCP approver
+
+`exclusive=True` combined with `browser=True` is now supported (0.4.0 raised
+`ValueError` here). `Capabilities.tools` in this mode is validated against a new pinned
+inventory, `CLAUDE_IN_CHROME_TOOLS` — the 22 `mcp__claude-in-chrome__*` tools Claude in
+Chrome offers under `--chrome` — instead of the ten `_DISABLED_TOOLS` names:
+
+```python
+from litellm_claude_cli import Capabilities, McpServer
+
+Capabilities(
+    exclusive=True,
+    browser=True,
+    tools=("mcp__claude-in-chrome__navigate", "mcp__claude-in-chrome__select_browser"),
+    mcp_servers=(McpServer(name="approver", command="python3", args=("-m", "my_approver")),),
+    permission_prompt_tool="mcp__approver__approve",
+)
+```
+
+argv: `--chrome`, then `--mcp-config <json>` (only if `mcp_servers`), then
+`--strict-mcp-config --tools ""`, then `--permission-mode default` UNCONDITIONALLY —
+whether or not a prompt tool is set, so a settings file's own default (including
+`bypassPermissions`) can never take over a call in this mode — then
+`--permission-prompt-tool <name>` only if `permission_prompt_tool` is set, then
+`--disallowed-tools <t>` for each `CLAUDE_IN_CHROME_TOOLS` entry not granted. The call
+runs with `--output-format stream-json --verbose` rather than `json`.
+
+**Two new `Capabilities` fields**, valid only in this mode (`ValueError` otherwise):
+`mcp_servers: tuple[McpServer, ...]` (`McpServer(name, command, args)`, a new frozen,
+exported dataclass — `name` must match `^[a-z][a-z0-9_]*$` and be unique) and
+`permission_prompt_tool: str | None`, whose `mcp__<name>__` prefix must name a
+configured server.
+
+**The guarantee: no result is ever accepted without a `system/init` event that passed
+both checks, and a failing init (or any other stream failure) kills the process — and
+the whole descendant process group it started, reaped rather than left running — as soon
+as it is detected.** Not "before the first model turn": the CLI may already have
+dispatched a request, or a tool call, by the time the kill lands. The checks: the
+offered tool set must equal exactly `set(tools)` (the prompt tool, if any, is never
+offered to the model — measured live), and `permissionMode` must always be `"default"`
+— unconditionally, not gated on `permission_prompt_tool`. An `assistant` event before
+any `init`, a `result` with no preceding `init`, a malformed stream line, or a stream
+that never yields an `init` or `result` all fail closed too. A fired watchdog raises
+`subprocess.TimeoutExpired`, matching every other mode's contract; a non-zero exit is
+checked for subscription exhaustion on stderr the same way the `json`-mode runner
+checks combined stdout+stderr. This is the outer fence on a browser session logged into
+real accounts: a silent pass-through of an extra tool or of bypass mode defeats
+whatever policy the permission-prompt approver enforces.
+
+The `result` event is parsed into the same response `_build_response` builds for `json`
+mode — same `structured_output`, same four-count usage summed across `modelUsage`, same
+finish-reason mapping — since the result event carries that payload's shape.
+
+**Every other mode's argv is unchanged, byte for byte.**
+
+### Verified against
+
+`claude` CLI 2.1.283, 2026-09-27. Proven offline: `ClaudeCliLLM` gained an injectable
+`stream_runner`, and the fail-closed checks and result parsing are tested against a
+redacted fixture of a real `claude -p --chrome --mcp-config <approver>
+--permission-prompt-tool ...` run, plus the real streaming runner pointed at a small
+fake CLI script — proving the kill actuator stops the OS process (and a spawned
+grandchild), not just that `kill()` was called. A live `claude -p --chrome` call is out
+of scope for this repo's own tests; the consumer's own live proof is the enforcement
+point for the real approver.
+
 ## 0.4.0
 
 ### Exclusive mode — an allowlist that bounds the tool set

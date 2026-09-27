@@ -15,6 +15,17 @@ an optional ``Capabilities``:
   granted back.  A deny list does not bound the tool set: every CLI release
   adds tools it does not name, and at least one of them (``Monitor``) runs
   shell commands.
+- ``exclusive=True`` combined with ``browser=True`` attaches Claude in Chrome
+  (``--chrome``) as a bounded allowlist of :data:`CLAUDE_IN_CHROME_TOOLS`
+  instead, optionally with an MCP-based permission-prompt approver
+  (``mcp_servers``, ``permission_prompt_tool``).  The call streams
+  (``--output-format stream-json --verbose``).  The guarantee: no result is
+  ever accepted without a ``system/init`` event that passed both checks (the
+  offered tool set and ``permissionMode``), and a failing init is killed as
+  soon as it is read — the outer fence on a browser session logged into real
+  accounts.  This is checked as soon as init arrives, which the measured CLI
+  emits before its first model request; it is not a guarantee that no request
+  or tool call has already been dispatched by the time the kill lands.
 """
 
 from __future__ import annotations
@@ -22,8 +33,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess  # noqa: S404 — invoking the local `claude` CLI by fixed argv
 import tempfile
+import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -50,6 +64,65 @@ _DISABLED_TOOLS = (
     "NotebookEdit",
 )
 
+# The `mcp__claude-in-chrome__*` tools offered under `--chrome` in
+# browser+exclusive mode, measured 2026-09-27 against CLI 2.1.283 (LCC8). This
+# is the inventory `Capabilities.tools` validates against in that mode, and
+# the set `--disallowed-tools` subtracts from in its argv.
+CLAUDE_IN_CHROME_TOOLS: tuple[str, ...] = tuple(
+    f"mcp__claude-in-chrome__{name}"
+    for name in (
+        "browser_batch",
+        "computer",
+        "file_upload",
+        "find",
+        "form_input",
+        "get_page_text",
+        "gif_creator",
+        "javascript_tool",
+        "list_connected_browsers",
+        "navigate",
+        "read_console_messages",
+        "read_network_requests",
+        "read_page",
+        "resize_window",
+        "select_browser",
+        "shortcuts_execute",
+        "shortcuts_list",
+        "switch_browser",
+        "tabs_close_mcp",
+        "tabs_context_mcp",
+        "tabs_create_mcp",
+        "upload_image",
+    )
+)
+assert len(CLAUDE_IN_CHROME_TOOLS) == 22, (  # noqa: S101 — a module-load-time invariant, not test code
+    "CLAUDE_IN_CHROME_TOOLS must hold exactly the 22 names measured 2026-09-27"
+)
+
+_MCP_SERVER_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class McpServer:
+    """One MCP server to load via ``--mcp-config`` in browser+exclusive mode.
+
+    Parameters
+    ----------
+    name:
+        The server's key inside ``--mcp-config``'s ``mcpServers`` map.  Must
+        match ``^[a-z][a-z0-9_]*$`` and be unique within a ``Capabilities``'
+        ``mcp_servers``.  A ``Capabilities.permission_prompt_tool`` of the
+        form ``mcp__<name>__<tool>`` must name a server present here.
+    command:
+        The executable to launch the server with.
+    args:
+        Its argv, excluding ``command`` itself.
+    """
+
+    name: str
+    command: str
+    args: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class Capabilities:
@@ -58,48 +131,98 @@ class Capabilities:
     Parameters
     ----------
     tools:
-        Tool names to ALLOW.  The valid names are exactly
-        :data:`_DISABLED_TOOLS` in both modes; anything else raises.  Matching
-        is exact and case-sensitive, because neither mode can tell the caller
-        about a bad name: subtractively, ``"bash"`` would leave ``Bash``'s
-        disable flag in argv, and in an allowlist the CLI silently drops an
-        unknown or wrong-case name, so the tool would be absent while the
-        caller believed it granted.
+        Tool names to ALLOW.  In every mode except browser+exclusive, valid
+        names are exactly :data:`_DISABLED_TOOLS`; in browser+exclusive mode
+        they are exactly :data:`CLAUDE_IN_CHROME_TOOLS`.  Anything else
+        raises.  Matching is exact and case-sensitive, because neither mode
+        can tell the caller about a bad name: subtractively, ``"bash"`` would
+        leave ``Bash``'s disable flag in argv, and in an allowlist the CLI
+        silently drops an unknown or wrong-case name, so the tool would be
+        absent while the caller believed it granted.
     browser:
         Attach the browser with ``--chrome``.  The browser's own tools arrive
         with that flag, so ``browser=True`` carrying no ``tools`` is a coherent
         and supported configuration — a call may drive a browser while ``Bash``
-        and the rest stay disabled.  Not combinable with ``exclusive``.
+        and the rest stay disabled.  Combined with ``exclusive=True``, see
+        below.
     exclusive:
         ``tools`` is the WHOLE tool set rather than a subtraction from the
-        deny list: argv carries ``--tools <tools joined by ",">`` (in the
-        caller's order) and ``--strict-mcp-config``, and no
-        ``--disallowed-tools``.  ``tools=()`` yields a call with no tools at
-        all.  ``browser=True`` raises: the browser's tools arrive as an MCP
-        server, and whether ``--strict-mcp-config`` lets them load is
-        unmeasured.
+        deny list.  Without ``browser``: argv carries
+        ``--tools <tools joined by ",">`` (in the caller's order) and
+        ``--strict-mcp-config``, and no ``--disallowed-tools``.  ``tools=()``
+        yields a call with no tools at all.  WITH ``browser=True``: the
+        browser's own tools arrive as an MCP server under ``--chrome``, argv
+        carries ``--tools ""`` plus ``--disallowed-tools`` for every
+        :data:`CLAUDE_IN_CHROME_TOOLS` entry not in ``tools``, and the call's
+        stream is read line by line with fail-closed ``system/init`` checks
+        (see :class:`ClaudeCliLLM`). This is the only mode ``mcp_servers`` and
+        ``permission_prompt_tool`` are meaningful in.
+    mcp_servers:
+        MCP servers to load via ``--mcp-config``.  Only valid with
+        ``exclusive=True, browser=True``; empty in every other mode.
+    permission_prompt_tool:
+        The ``mcp__<name>__<tool>`` tool name the CLI's own permission prompt
+        is routed to, via ``--permission-prompt-tool`` with an EXPLICIT
+        ``--permission-mode default`` (never ``bypassPermissions``, and never
+        a settings file's inherited default).  ``<name>`` must name a server
+        in ``mcp_servers``.  Only valid with ``exclusive=True, browser=True``.
     """
 
     tools: tuple[str, ...] = ()
     browser: bool = False
     exclusive: bool = False
+    mcp_servers: tuple[McpServer, ...] = ()
+    permission_prompt_tool: str | None = None
 
     def __post_init__(self) -> None:
-        unknown = tuple(t for t in self.tools if t not in _DISABLED_TOOLS)
+        browser_exclusive = self.exclusive and self.browser
+        inventory = CLAUDE_IN_CHROME_TOOLS if browser_exclusive else _DISABLED_TOOLS
+        unknown = tuple(t for t in self.tools if t not in inventory)
         if unknown:
             raise ValueError(
                 "unknown tool name(s): "
                 + ", ".join(repr(u) for u in unknown)
                 + ". Valid names, matched exactly: "
-                + ", ".join(_DISABLED_TOOLS)
+                + ", ".join(inventory)
                 + "."
             )
-        if self.exclusive and self.browser:
+
+        if not browser_exclusive and (
+            self.mcp_servers or self.permission_prompt_tool is not None
+        ):
             raise ValueError(
-                "browser=True cannot be combined with exclusive=True: the "
-                "browser's tools arrive as an MCP server, and whether "
-                "--strict-mcp-config lets them load is unmeasured."
+                "mcp_servers and permission_prompt_tool require "
+                "exclusive=True, browser=True; got "
+                f"exclusive={self.exclusive!r}, browser={self.browser!r}."
             )
+
+        seen: set[str] = set()
+        for server in self.mcp_servers:
+            if not _MCP_SERVER_NAME_RE.fullmatch(server.name):
+                raise ValueError(
+                    f"McpServer name {server.name!r} must match "
+                    f"{_MCP_SERVER_NAME_RE.pattern!r}."
+                )
+            if server.name in seen:
+                raise ValueError(f"duplicate McpServer name: {server.name!r}")
+            seen.add(server.name)
+
+        if self.permission_prompt_tool is not None:
+            server_name = _mcp_server_name_prefix(self.permission_prompt_tool)
+            if server_name is None or server_name not in seen:
+                raise ValueError(
+                    f"permission_prompt_tool {self.permission_prompt_tool!r} "
+                    "must be of the form 'mcp__<name>__<tool>' where <name> "
+                    f"is a server in mcp_servers; got server names {sorted(seen)!r}."
+                )
+
+
+def _mcp_server_name_prefix(tool: str) -> str | None:
+    """Return the ``<name>`` in a ``mcp__<name>__<tool>`` tool name, or ``None``."""
+    if not tool.startswith("mcp__"):
+        return None
+    name, sep, _rest = tool[len("mcp__") :].partition("__")
+    return name if sep else None
 
 
 def _disabled_tools_for(capabilities: Capabilities | None) -> tuple[str, ...]:
@@ -251,6 +374,384 @@ def _default_runner(
             raise exhausted
         raise RuntimeError(f"claude -p failed ({proc.returncode}): {combined.strip()}")
     return proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Streaming runner (browser+exclusive mode only)
+# ---------------------------------------------------------------------------
+
+
+class _StreamProcess(Protocol):
+    """A running ``claude -p --chrome`` process, read line by line and
+    killable mid-stream.
+
+    ``kill()`` must be safe to call more than once and after the process has
+    already exited on its own, and must leave no live descendant (LCC8 review
+    F7: a naive single-pid kill leaves a grandchild running). ``finish()`` is
+    called once the stream has been fully consumed (EOF, with no ``result``
+    returned) to classify why: it must itself ensure the process is gone
+    before returning, and its bounded stderr text feeds the same exhaustion
+    classification the ``json``-mode runner uses. ``cleanup()`` is called
+    exactly once by the caller, on every exit path (success or failure), to
+    release anything ``finish()`` might otherwise leak if it's never called
+    (LCC8 review N1: a captured-stderr temp file survived every path except
+    the one through ``finish()``) — it must be safe to call whether or not
+    ``finish()`` ran.
+    """
+
+    def __iter__(self) -> Iterator[str]: ...  # noqa: E704
+
+    def kill(self) -> None: ...  # noqa: E704
+
+    def reap(self, timeout: float = ...) -> None: ...  # noqa: E704
+
+    @property
+    def timed_out(self) -> bool: ...  # noqa: E704
+
+    def finish(self) -> tuple[int | None, str]: ...  # noqa: E704
+
+    def cleanup(self) -> None: ...  # noqa: E704
+
+
+class _StreamRunner(Protocol):
+    """Protocol for the streaming runner used only in browser+exclusive mode.
+
+    Unlike :class:`_Runner`, this returns a live, killable, line-by-line
+    :class:`_StreamProcess` rather than finished output, so the fail-closed
+    ``system/init`` checks can kill it the moment a check fails."""
+
+    def __call__(
+        self, argv: list[str], *, input_text: str | None, timeout: float
+    ) -> _StreamProcess: ...  # noqa: E704
+
+
+# Bound on how much of a failed stream call's stderr is read for exhaustion
+# classification (LCC8 review F6). Generous relative to any real CLI error.
+_STREAM_STDERR_CAP = 65536
+
+
+class _PopenStreamProcess:
+    """The real :class:`_StreamProcess`, backed by :class:`subprocess.Popen`.
+
+    Started in its own session (``start_new_session=True``) so ``kill()`` can
+    signal the whole process group, not just the ``claude`` pid — an MCP
+    server it spawned would otherwise survive (LCC8 review F7). A background
+    timer kills the process if *timeout* elapses and records that the
+    watchdog fired: the caller reads stdout lazily, so ``subprocess.run``'s
+    own blocking timeout (used by :func:`_default_runner`) does not apply
+    here, and the caller needs to tell a watchdog kill apart from any other
+    reason the stream ended (LCC8 review F6).
+    """
+
+    def __init__(
+        self, proc: subprocess.Popen[str], timeout: float, stderr_path: str
+    ) -> None:
+        self._proc = proc
+        self._stderr_path: str | None = stderr_path
+        self._timed_out = False
+        self._timer = threading.Timer(timeout, self._on_timeout)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _on_timeout(self) -> None:
+        self._timed_out = True
+        self.kill()
+
+    def __iter__(self) -> Iterator[str]:
+        assert self._proc.stdout is not None
+        try:
+            yield from self._proc.stdout
+        finally:
+            self._timer.cancel()
+
+    def kill(self) -> None:
+        self._timer.cancel()
+        try:
+            os.killpg(self._proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            # Not our own session leader (shouldn't happen given
+            # start_new_session=True), or already reaped — fall back to a
+            # direct signal so a real failure here is never silent.
+            try:
+                self._proc.kill()
+            except ProcessLookupError:
+                pass
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover — defensive only
+            pass
+
+    def reap(self, timeout: float = 5.0) -> None:
+        """Wait up to *timeout* seconds for a clean exit; kill the group if it
+        hasn't by then. Called on the success path so a result doesn't leave
+        the process (or a lingering child) running (LCC8 review F7)."""
+        try:
+            self._proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill()
+
+    @property
+    def timed_out(self) -> bool:
+        return self._timed_out
+
+    def finish(self) -> tuple[int | None, str]:
+        """Ensure the process is gone, then return ``(returncode, stderr)``.
+
+        Called once the stream hits EOF without a ``result`` event, to
+        classify why. ``kill()`` runs first (idempotent if already exited) so
+        a lingering descendant holding stderr open can't block this read;
+        stderr was captured to a temp file rather than a pipe for the same
+        reason — reading a pipe here could deadlock behind a still-open
+        write end.
+
+        Does NOT delete the stderr temp file: the caller's ``cleanup()`` owns
+        that, since ``finish()`` itself is never reached on the majority of
+        exit paths (a passing result, or any fail-closed kill).
+        """
+        self.kill()
+        stderr_text = ""
+        if self._stderr_path is not None:
+            try:
+                with open(self._stderr_path, "rb") as fh:
+                    stderr_text = fh.read(_STREAM_STDERR_CAP).decode("utf-8", "replace")
+            except OSError:  # pragma: no cover — defensive only
+                pass
+        return self._proc.returncode, stderr_text
+
+    def cleanup(self) -> None:
+        """Delete the captured-stderr temp file. Idempotent, and safe whether
+        or not ``finish()`` ran — the caller invokes this exactly once, on
+        every exit path (LCC8 review N1)."""
+        if self._stderr_path is None:
+            return
+        try:
+            os.unlink(self._stderr_path)
+        except OSError:
+            pass
+        self._stderr_path = None
+
+
+def _default_stream_runner(
+    argv: list[str],
+    *,
+    input_text: str | None,
+    timeout: float = DEFAULT_TIMEOUT,
+    stderr_dir: str | None = None,
+) -> _StreamProcess:
+    """Run *argv* as a subprocess, streaming stdout line by line.
+
+    *input_text*, if given, is written to stdin and closed before any output
+    is read (the CLI does not start emitting until stdin closes). Stderr is
+    captured to a bounded temp file for exhaustion classification if the
+    stream ends without a result (see :meth:`_PopenStreamProcess.finish`);
+    the returned process's ``cleanup()`` deletes it on every exit path.
+    *stderr_dir* places that temp file in a given directory instead of the
+    platform default — not used by the provider itself, but lets a test
+    inject an isolated directory to snapshot rather than sharing ``/tmp``
+    with everything else on the machine. The process runs in its own session
+    so it can be killed as a group. A background timer kills it after
+    *timeout* seconds.
+    """
+    stderr_fd, stderr_path = tempfile.mkstemp(suffix=".stderr", dir=stderr_dir)
+    try:
+        with os.fdopen(stderr_fd, "wb") as stderr_file:
+            proc = subprocess.Popen(  # noqa: S603 — fixed argv, no shell
+                argv,
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+                start_new_session=True,  # LCC8 review F7: killable as a group
+            )
+    except BaseException:
+        try:
+            os.unlink(stderr_path)
+        except OSError:
+            pass
+        raise
+    if input_text is not None:
+        assert proc.stdin is not None
+        proc.stdin.write(input_text)
+        proc.stdin.close()
+    return _PopenStreamProcess(proc, timeout, stderr_path)
+
+
+def _browser_exclusive_argv(capabilities: Capabilities) -> list[str]:
+    """The argv block for ``exclusive=True, browser=True``, per seam v218 §C,
+    amended by LCC8 review ruling F8.
+
+    Order: ``--chrome``; ``--mcp-config <json>`` iff ``mcp_servers``;
+    ``--strict-mcp-config``; ``--tools ""``; ``--permission-mode default``
+    UNCONDITIONALLY (F8: never inherited from a settings file's own default,
+    whether or not a prompt tool is set); ``--permission-prompt-tool <name>``
+    iff ``permission_prompt_tool``; ``--disallowed-tools <t>`` for each
+    :data:`CLAUDE_IN_CHROME_TOOLS` entry not granted, in inventory order.
+    Never ``--permission-mode bypassPermissions``: bypass would never consult
+    an approver, and F8 closes the gap where a call with no approver could
+    otherwise inherit it.
+    """
+    argv: list[str] = ["--chrome"]
+    if capabilities.mcp_servers:
+        mcp_config = {
+            "mcpServers": {
+                server.name: {"command": server.command, "args": list(server.args)}
+                for server in capabilities.mcp_servers
+            }
+        }
+        argv += ["--mcp-config", json.dumps(mcp_config, separators=(",", ":"))]
+    argv += ["--strict-mcp-config", "--tools", "", "--permission-mode", "default"]
+    if capabilities.permission_prompt_tool is not None:
+        argv += ["--permission-prompt-tool", capabilities.permission_prompt_tool]
+    granted = frozenset(capabilities.tools)
+    for t in CLAUDE_IN_CHROME_TOOLS:
+        if t not in granted:
+            argv += ["--disallowed-tools", t]
+    return argv
+
+
+def _read_stream_result(
+    proc: _StreamProcess, capabilities: Capabilities, timeout: float
+) -> str:
+    """Read *proc* line by line, enforcing the fail-closed ``system/init`` checks.
+
+    Returns the raw ``result`` event's JSON line, which ``_build_response``
+    parses exactly as the ``json``-mode payload.
+
+    **The guarantee:** no ``result`` is ever accepted without an ``init`` that
+    passed both checks below, and a failing init (or any other failure) kills
+    *proc* as soon as it is detected — not "before the first model turn": the
+    CLI may already have dispatched a request or a tool call by the time the
+    kill lands (see the module docstring and LCC8 review Q2).
+
+    Checks, in the order the stream can violate them:
+      - an ``assistant`` event must not arrive before any
+        ``{"type":"system","subtype":"init"}`` event;
+      - every such ``init`` event's ``tools`` must be present as a JSON array
+        and equal ``set(capabilities.tools)`` exactly — a missing or ``null``
+        ``tools`` key fails closed too, even when the grant is ``()`` (LCC8
+        review F5: ``set(None or [])`` used to equal ``set(())`` and pass);
+      - every such ``init`` event's ``permissionMode`` must be ``"default"``,
+        UNCONDITIONALLY (LCC8 review F8: no longer gated on
+        ``permission_prompt_tool`` being set, since argv now always emits
+        ``--permission-mode default`` in this mode);
+      - a ``result`` event must not arrive without a preceding ``init``;
+      - the stream must yield a ``result`` at all.
+
+    On EOF without a ``result``, ``proc.finish()`` classifies why: a fired
+    watchdog raises ``subprocess.TimeoutExpired`` (matching every other
+    mode's contract); a non-zero exit is checked for a subscription-exhaustion
+    marker on stderr exactly as ``_default_runner`` checks combined
+    stdout+stderr, raising ``ClaudeExhausted`` if it matches; otherwise a
+    plain ``RuntimeError`` names the exit code, or that no init/result ever
+    arrived.
+
+    ANY exception out of this function — including a malformed, non-object
+    stream line — kills *proc* before propagating (LCC8 review F1): the
+    entire loop runs under one ``try/except BaseException: proc.kill(); raise``,
+    so no exit path can disarm the watchdog and leave the child running
+    unsupervised.
+    """
+    init_seen = False
+    try:
+        for raw_line in proc:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                # RuntimeError, not the JSONDecodeError/ValueError this would
+                # otherwise surface as: this module reserves ValueError for
+                # caller error (see _encode_schema_arg), and _build_response
+                # raises RuntimeError for the same situation in json mode.
+                raise RuntimeError(
+                    f"claude -p --chrome returned non-JSON stream output: {line[:200]!r}"
+                ) from exc
+            if not isinstance(event, dict):
+                raise RuntimeError(
+                    "claude -p --chrome: a stream line was not a JSON object: "
+                    f"{line[:200]!r}"
+                )
+            etype = event.get("type")
+
+            if etype == "assistant":
+                if not init_seen:
+                    raise RuntimeError(
+                        "claude -p --chrome: an assistant event arrived before "
+                        "any system/init event"
+                    )
+                continue
+
+            if etype == "system" and event.get("subtype") == "init":
+                init_seen = True
+                offered = event.get("tools")
+                if not isinstance(offered, list):
+                    raise RuntimeError(
+                        "claude -p --chrome: system/init 'tools' was missing "
+                        f"or not a list: {offered!r}"
+                    )
+                got_tools = set(offered)
+                want_tools = set(capabilities.tools)
+                if got_tools != want_tools:
+                    raise RuntimeError(
+                        "claude -p --chrome: system/init offered tools "
+                        f"{sorted(got_tools)}, expected exactly {sorted(want_tools)}"
+                    )
+                got_mode = event.get("permissionMode")
+                if got_mode != "default":
+                    raise RuntimeError(
+                        "claude -p --chrome: system/init permissionMode is "
+                        f"{got_mode!r}, expected 'default' (this mode always "
+                        "requires it explicitly, so a settings file's own "
+                        "default can never take over)"
+                    )
+                continue
+
+            if etype == "result":
+                if not init_seen:
+                    raise RuntimeError(
+                        "claude -p --chrome: a result event arrived without "
+                        "any preceding system/init event"
+                    )
+                proc.reap()
+                return line
+
+            # Anything else (hook_started, hook_response, thinking_tokens,
+            # rate_limit_event, user, ...) carries no information either
+            # check needs, and is ignored.
+
+        # EOF without a result: classify why before raising.
+        returncode, stderr_text = proc.finish()
+        if proc.timed_out:
+            raise subprocess.TimeoutExpired(
+                cmd="claude -p --chrome",
+                timeout=timeout,
+                output=None,
+                stderr=stderr_text,
+            )
+        if returncode not in (0, None):
+            exhausted = _exhaustion_error(stderr_text)
+            if exhausted is not None:
+                raise exhausted
+            raise RuntimeError(
+                f"claude -p --chrome failed ({returncode}): {stderr_text.strip()}"
+            )
+        if not init_seen:
+            raise RuntimeError(
+                "claude -p --chrome: the stream ended without a system/init event"
+            )
+        raise RuntimeError(
+            "claude -p --chrome: the stream ended without a result event"
+        )
+    except BaseException:
+        proc.kill()
+        raise
+    finally:
+        # Owns the stderr temp file's lifetime end to end: every exit path
+        # above — the return, and every raise, including ones the
+        # except-clause re-raises — passes through here exactly once
+        # (LCC8 review N1).
+        proc.cleanup()
 
 
 def _flatten_content(content: Any) -> str:
@@ -460,7 +961,8 @@ class ClaudeCliLLM(CustomLLM):
     ----------
     runner:
         Callable with signature ``(argv, *, input_text) -> str``.  Defaults to
-        the real subprocess runner.  Override in tests.
+        the real subprocess runner.  Override in tests.  Not used in
+        browser+exclusive mode, which uses ``stream_runner`` instead.
     capabilities:
         What the call may touch.  ``None`` (the default) disables the ten tools
         in :data:`_DISABLED_TOOLS` and grants no browser.  Tools outside that
@@ -476,6 +978,17 @@ class ClaudeCliLLM(CustomLLM):
         subprocess kill is `subprocess.TimeoutExpired`, exactly as before.
         Must be a positive number; anything else raises ``ValueError`` at
         construction, not at call time.
+    stream_runner:
+        Callable with signature ``(argv, *, input_text, timeout) ->
+        _StreamProcess``, used ONLY when ``capabilities.exclusive and
+        capabilities.browser``.  Defaults to the real streaming subprocess
+        runner, which starts the child in its own session so a failing check
+        can kill the whole process group, not just the ``claude`` pid.
+        Override in tests with a fake driven by a recorded stream, and assert
+        ``kill()`` was called when a check should fail closed — or, to prove
+        the actuator itself rather than just the call to it, point this at
+        the real runner with a fake CLI script and assert the process (and
+        any child it spawned) is actually dead afterward.
     """
 
     def __init__(
@@ -483,6 +996,7 @@ class ClaudeCliLLM(CustomLLM):
         runner: _Runner = _default_runner,
         capabilities: Capabilities | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        stream_runner: _StreamRunner = _default_stream_runner,
     ) -> None:
         super().__init__()
         if (
@@ -496,6 +1010,7 @@ class ClaudeCliLLM(CustomLLM):
         self._runner = runner
         self._capabilities = capabilities
         self._timeout = float(timeout)
+        self._stream_runner = stream_runner
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -534,6 +1049,11 @@ class ClaudeCliLLM(CustomLLM):
         # Encode before the temp file is created so an oversized schema cannot leak one.
         schema_arg = _encode_schema_arg(schema) if schema is not None else None
 
+        capabilities = self._capabilities
+        browser_exclusive = (
+            capabilities is not None and capabilities.exclusive and capabilities.browser
+        )
+
         # Write system content to a temp file (mode 0o600) so it never appears
         # as an argv element.  Linux's MAX_ARG_STRLEN (~128 KB) rejects large
         # per-argument strings; bundle-agent system blocks regularly exceed that.
@@ -554,31 +1074,45 @@ class ClaudeCliLLM(CustomLLM):
                 # context.  The flag also closes the `Skill` tool, which sits
                 # outside `_DISABLED_TOOLS`.
                 "--disable-slash-commands",
-                "--output-format",
-                "json",
-                "--model",
-                bare_model,
             ]
+            if browser_exclusive:
+                # This mode's fail-closed init checks (`_read_stream_result`)
+                # need the stream, not a finished JSON blob.
+                argv += ["--output-format", "stream-json", "--verbose"]
+            else:
+                argv += ["--output-format", "json"]
+            argv += ["--model", bare_model]
             if schema_arg is not None:
                 argv += ["--json-schema", schema_arg]
             # The capability block: everything governing what this call may
             # touch.  `--chrome`'s position within argv is not significant to
             # the CLI; it sits here so the block reads as a unit.
-            if self._capabilities is not None and self._capabilities.exclusive:
+            if browser_exclusive:
+                # browser_exclusive implies capabilities is not None; narrows for mypy.
+                assert capabilities is not None
+                argv += _browser_exclusive_argv(capabilities)
+            elif capabilities is not None and capabilities.exclusive:
                 # An allowlist makes deny flags redundant; emitting them would
                 # re-couple argv to a list known to be incomplete.
                 argv += [
                     "--tools",
-                    ",".join(self._capabilities.tools),
+                    ",".join(capabilities.tools),
                     "--strict-mcp-config",
                 ]
             else:
-                if self._capabilities is not None and self._capabilities.browser:
+                if capabilities is not None and capabilities.browser:
                     argv.append("--chrome")
-                for t in _disabled_tools_for(self._capabilities):
+                for t in _disabled_tools_for(capabilities):
                     argv += ["--disallowed-tools", t]
 
-            raw = self._runner(argv, input_text=user_prompt, timeout=self._timeout)
+            if browser_exclusive:
+                assert capabilities is not None  # narrows for mypy
+                proc = self._stream_runner(
+                    argv, input_text=user_prompt, timeout=self._timeout
+                )
+                raw = _read_stream_result(proc, capabilities, self._timeout)
+            else:
+                raw = self._runner(argv, input_text=user_prompt, timeout=self._timeout)
         finally:
             try:
                 os.unlink(sys_path)
