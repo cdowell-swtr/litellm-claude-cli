@@ -488,3 +488,23 @@ client identity of its own.
 passed, 6 skipped. ruff clean, mypy at the 22-error baseline. Live: two `haiku` calls in
 separate processes produced two files, one line each, `account` `claude/acme` then `null`,
 `output` 59 and 86. A third call with the variable unset wrote nothing.
+
+#### #0020 · completed · LCC10 · 2026-11-13
+v0.6.1, a follow-up from the skills session before jsp and primer pin 0.6.0.
+
+**What changed.** `_UsageLog.record` takes the raw `modelUsage` breakdown, read from
+`provider_specific_fields["model_usage"]`, and writes one line per entry. `model` is the
+entry's key, the resolved id, with that entry's own counts. All of a call's lines go out
+in one `os.write`. Only a result without `modelUsage` falls back to one line under the
+requested model, with the response's `Usage` counts.
+
+**Why.** The usage service prices each line by looking up its model id in a dated price
+table, and matches model-scoped quotas against the same id. An alias such as `haiku`
+can't be priced, and summing across models prices one model's tokens at another's rate.
+This reverses #0019's choice of the requested model.
+
+**Verification.** In `tests/test_usage_records.py`, the `modelUsage`-sum test is replaced
+by a two-model test (two lines, resolved ids, separate counts, shared t/account/caller).
+A new test covers the fallback (one line, requested model). The unset-directory test is
+unchanged. Full suite: 146 passed, 6 skipped. ruff clean, mypy at the 22-error baseline.
+Live: one haiku call wrote one line with `model` `claude-haiku-5-5`.

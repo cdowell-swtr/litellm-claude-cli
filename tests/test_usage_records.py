@@ -127,26 +127,61 @@ def test_unset_dir_writes_nothing_and_the_call_succeeds(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_model_usage_sums_are_recorded(
+def test_each_model_usage_entry_gets_its_own_line_under_its_resolved_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LITELLM_CLAUDE_CLI_USAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENT_ACCOUNT", "claude/acme")
     payload = {
         "is_error": False,
         "result": "x",
+        "usage": {"input_tokens": 999, "output_tokens": 999},
         "modelUsage": {
-            "a": {"inputTokens": 1, "outputTokens": 2, "cacheCreationInputTokens": 4},
-            "b": {"inputTokens": 10, "outputTokens": 20, "cacheReadInputTokens": 8},
+            "claude-sonnet-5-5": {
+                "inputTokens": 1,
+                "outputTokens": 2,
+                "cacheCreationInputTokens": 4,
+                "cacheReadInputTokens": 3,
+            },
+            "claude-haiku-5-5": {"inputTokens": 10, "outputTokens": 20},
         },
     }
     _call(_llm(payload))
 
+    first, second = _lines(tmp_path)
+    assert set(first) == set(second) == _KEYS
+    counts = {
+        line["model"]: (
+            line["input"],
+            line["cache_write"],
+            line["cache_read"],
+            line["output"],
+        )
+        for line in (first, second)
+    }
+    assert counts == {
+        "claude-sonnet-5-5": (1, 4, 3, 2),
+        "claude-haiku-5-5": (10, 0, 0, 20),
+    }
+    for key in ("t", "account", "caller"):
+        assert first[key] == second[key]
+    assert first["account"] == "claude/acme"
+
+
+def test_without_model_usage_one_line_names_the_requested_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_CLAUDE_CLI_USAGE_DIR", str(tmp_path))
+
+    _call(_llm())
+
     [line] = _lines(tmp_path)
+    assert line["model"] == "sonnet"
     assert (line["input"], line["cache_write"], line["cache_read"], line["output"]) == (
         11,
-        4,
-        8,
-        22,
+        5,
+        3,
+        7,
     )
 
 
