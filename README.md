@@ -216,12 +216,35 @@ populates a `tool_calls` array, so `tool_use` always maps to `finish_reason:
 caller on that path has no way to detect a truncated `tool_use` turn; use
 `litellm.completion()` if you need to.
 
+## Usage records
+
+Set `LITELLM_CLAUDE_CLI_USAGE_DIR` and every completed call appends one JSON line to a
+file in that directory — one `<start-ns>-<pid>.jsonl` file per process, created on the
+first call:
+
+```json
+{"t": 1794597511.23, "model": "haiku", "input": 2, "cache_write": 31468, "cache_read": 0, "output": 59, "account": "claude/acme", "caller": "my_tool"}
+```
+
+- `t` — epoch seconds when the call finished.
+- `model` — the model the call asked for, provider prefix stripped (`claude-cli/haiku` → `haiku`).
+- `input`, `cache_write`, `cache_read`, `output` — the same counts as the response's `Usage`
+  (summed across `modelUsage`), `0` when unreported.
+- `account` — `AGENT_ACCOUNT` when set and non-empty, else `null`.
+- `caller` — the calling program: its `-m` module name, else the basename of `sys.argv[0]`,
+  else `null`.
+
+Lines hold numbers, a timestamp and names only — never prompt or completion text. Unset or
+empty: nothing is written. A failed write never fails the call; it is logged once, as a
+warning on the `litellm_claude_cli` logger. A call that raises writes no line.
+
 ## How it works
 
 Each call shells out to `claude -p` with `--disable-slash-commands`, plus either an allowlist (`--tools … --strict-mcp-config`, in exclusive mode; `--chrome … --tools "" --disallowed-tools …` in browser+exclusive mode) or the ten tools in `_DISABLED_TOOLS` denied (unless `Capabilities` grants some back). Only an allowlist bounds the tool set; see [Capabilities](#capabilities). Skills are disabled unconditionally: a one-shot `-p` call resolves no slash command, and the `Skill` tool sits outside `_DISABLED_TOOLS`. There is no capability to grant skills back. The system prompt is written to a temp file (never passed as an argv element) to avoid Linux's `MAX_ARG_STRLEN` limit (~128 KB). Browser+exclusive mode runs with `--output-format stream-json --verbose` instead of `json`, reading the stream line by line and killing the process the moment a `system/init` event fails either check, or any other stream failure occurs — every other mode still runs to completion and parses `--output-format json`. `Usage` sums every model the call drove: the CLI's per-model `modelUsage` (a web tool runs on a second model that top-level `usage` omits), falling back to top-level `usage` when absent. Cache token fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are carried the same way. The raw per-model breakdown is in `provider_specific_fields["model_usage"]`.
 
 ## Public API
 
+- `USAGE_DIR_ENV` — the name of the usage-records environment variable, `LITELLM_CLAUDE_CLI_USAGE_DIR`; see [Usage records](#usage-records)
 - `ClaudeCliLLM` — the `CustomLLM` subclass; accepts optional `runner`/`stream_runner` (for testing) and `capabilities` arguments
 - `Capabilities` — `tools`/`browser`/`exclusive`/`mcp_servers`/`permission_prompt_tool` grants for a `ClaudeCliLLM` instance; see [Capabilities](#capabilities) above
 - `McpServer` — one MCP server (`name`, `command`, `args`) for `Capabilities.mcp_servers`, valid only in browser+exclusive mode

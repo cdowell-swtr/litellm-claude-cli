@@ -31,12 +31,15 @@ an optional ``Capabilities``:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import signal
 import subprocess  # noqa: S404 — invoking the local `claude` CLI by fixed argv
+import sys
 import tempfile
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -950,6 +953,90 @@ def _build_response(raw: str) -> ModelResponse:
 
 
 # ---------------------------------------------------------------------------
+# Per-call usage records
+# ---------------------------------------------------------------------------
+
+_log = logging.getLogger(__name__)
+
+# Directory that receives one ``<start>-<pid>.jsonl`` file per process, one
+# line per completed call.  Unset or empty: nothing is written.
+USAGE_DIR_ENV = "LITELLM_CLAUDE_CLI_USAGE_DIR"
+
+
+def _caller_name() -> str | None:
+    """The calling program's name: its script, or its module under ``-m``."""
+    main = sys.modules.get("__main__")
+    spec = getattr(main, "__spec__", None)
+    if spec is not None and spec.name:
+        return str(spec.name).removesuffix(".__main__")
+    name = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    return name if name not in ("", "-c", "-") else None
+
+
+class _UsageLog:
+    """Appends one JSON line per completed call; never fails the call.
+
+    Lines hold numbers, a timestamp and names only — never prompt or
+    completion text.  The file is opened lazily with ``O_APPEND`` and each
+    line goes out in one ``os.write``.  A pid change (a fork) opens a new
+    file, so no two processes share one.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._fd: int | None = None
+        self._pid: int | None = None
+        self._dir: str | None = None
+        self._warned = False
+
+    def record(self, model: str, usage: Any) -> None:
+        directory = os.environ.get(USAGE_DIR_ENV, "")
+        if not directory:
+            return
+        try:
+            line = json.dumps(
+                {
+                    "t": time.time(),
+                    "model": model,
+                    "input": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "cache_write": int(
+                        getattr(usage, "cache_creation_input_tokens", 0) or 0
+                    ),
+                    "cache_read": int(
+                        getattr(usage, "cache_read_input_tokens", 0) or 0
+                    ),
+                    "output": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "account": os.environ.get("AGENT_ACCOUNT") or None,
+                    "caller": _caller_name(),
+                }
+            )
+            with self._lock:
+                os.write(self._open(directory), (line + "\n").encode())
+        except Exception:  # noqa: BLE001 — a usage record must never fail the call
+            if not self._warned:
+                self._warned = True
+                _log.warning(
+                    "could not write usage record to %s", directory, exc_info=True
+                )
+
+    def _open(self, directory: str) -> int:
+        pid = os.getpid()
+        if self._fd is not None and self._pid == pid and self._dir == directory:
+            return self._fd
+        if self._fd is not None and self._pid == pid:
+            os.close(self._fd)
+        self._fd = None
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{time.time_ns()}-{pid}.jsonl")
+        self._fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        self._pid, self._dir = pid, directory
+        return self._fd
+
+
+_usage_log = _UsageLog()
+
+
+# ---------------------------------------------------------------------------
 # CustomLLM subclass
 # ---------------------------------------------------------------------------
 
@@ -1120,6 +1207,7 @@ class ClaudeCliLLM(CustomLLM):
                 pass
 
         result = _build_response(raw)
+        _usage_log.record(bare_model, result.usage)  # type: ignore[attr-defined]
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:
