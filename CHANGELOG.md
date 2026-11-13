@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+### Per-call usage records
+
+With `LITELLM_CLAUDE_CLI_USAGE_DIR` set, every completed call appends one JSON line —
+`t`, `model`, `input`, `cache_write`, `cache_read`, `output`, `account` (from
+`AGENT_ACCOUNT`), `caller` — to a per-process `<start-ns>-<pid>.jsonl` file in that
+directory. Numbers, a timestamp and names only. Unset or empty: nothing is written. A
+write failure never fails the call and is logged once. New public constant
+`USAGE_DIR_ENV`. See the README's *Usage records*.
+
 ## 0.5.0
 
 ### Browser+exclusive mode — `--chrome` under a bounded allowlist, with an MCP approver

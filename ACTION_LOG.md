@@ -462,3 +462,29 @@ new. No leaked `*.stderr` files and no orphan `fake_cli.py` processes after the 
 (`find /tmp/pytest-of-chris -name '*.stderr'`, `ps aux | grep fake_cli.py`, both checked
 empty).
 
+
+#### #0019 · completed · LCC9 · 2026-11-13
+v0.6.0, from the skills session's usage-provider brief (skills repo,
+`docs/superpowers/briefs/2026-11-13-usage-provider.md`), so headless spend shows up in
+`coding-agents usage`.
+
+**What changed.** `_run` hands every completed call's `Usage` to a module-level
+`_UsageLog`, which appends one JSON line to `<start-ns>-<pid>.jsonl` under
+`LITELLM_CLAUDE_CLI_USAGE_DIR`. Keys: `t`, `model`, `input`, `cache_write`, `cache_read`,
+`output`, `account`, `caller`. The fd is opened lazily, `O_APPEND`, mode 0600, and each
+line goes out in one `os.write` under a lock. A pid change opens a new file, so a forked
+child never shares its parent's. Any exception is swallowed and logged once. Unset or
+empty variable: no file, no directory. Calls that raise write nothing; the brief covers
+completed calls only.
+
+**Two keys the brief left to the provider.** `model` is the requested model with the
+prefix stripped. The json payload has no top-level model, and `modelUsage` can name
+several, so the request is the one value every call has. `caller` is the `-m` module name,
+else the basename of `argv[0]`, else null. The provider runs in-process and receives no
+client identity of its own.
+
+**Verification.** 6 new tests in `tests/test_usage_records.py`: the brief's three cases,
+`modelUsage` sums, write failure logs once, and a fork opens its own file. Full suite: 145
+passed, 6 skipped. ruff clean, mypy at the 22-error baseline. Live: two `haiku` calls in
+separate processes produced two files, one line each, `account` `claude/acme` then `null`,
+`output` 59 and 86. A third call with the variable unset wrote nothing.
