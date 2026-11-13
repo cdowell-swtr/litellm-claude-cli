@@ -974,7 +974,7 @@ def _caller_name() -> str | None:
 
 
 class _UsageLog:
-    """Appends one JSON line per completed call; never fails the call.
+    """Appends a completed call's JSON lines; never fails the call.
 
     Lines hold numbers, a timestamp and names only — never prompt or
     completion text.  The file is opened lazily with ``O_APPEND`` and each
@@ -989,29 +989,60 @@ class _UsageLog:
         self._dir: str | None = None
         self._warned = False
 
-    def record(self, model: str, usage: Any) -> None:
+    def record(self, model: str, usage: Any, model_usage: Any = None) -> None:
+        """Write one line per ``modelUsage`` entry, keyed by its resolved id.
+
+        Without a ``modelUsage`` breakdown, one line under *model* (the
+        requested model) carries the call's ``Usage``.  Per-model lines are
+        never summed: each model is priced and quota-matched by its own id.
+        """
         directory = os.environ.get(USAGE_DIR_ENV, "")
         if not directory:
             return
         try:
-            line = json.dumps(
-                {
-                    "t": time.time(),
-                    "model": model,
-                    "input": int(getattr(usage, "prompt_tokens", 0) or 0),
-                    "cache_write": int(
-                        getattr(usage, "cache_creation_input_tokens", 0) or 0
-                    ),
-                    "cache_read": int(
-                        getattr(usage, "cache_read_input_tokens", 0) or 0
-                    ),
-                    "output": int(getattr(usage, "completion_tokens", 0) or 0),
-                    "account": os.environ.get("AGENT_ACCOUNT") or None,
-                    "caller": _caller_name(),
-                }
-            )
+            if isinstance(model_usage, dict) and model_usage:
+                rows = [
+                    (
+                        str(name),
+                        e.get("inputTokens", 0),
+                        e.get("cacheCreationInputTokens", 0),
+                        e.get("cacheReadInputTokens", 0),
+                        e.get("outputTokens", 0),
+                    )
+                    for name, e in model_usage.items()
+                    if isinstance(e, dict)
+                ]
+            else:
+                rows = [
+                    (
+                        model,
+                        getattr(usage, "prompt_tokens", 0),
+                        getattr(usage, "cache_creation_input_tokens", 0),
+                        getattr(usage, "cache_read_input_tokens", 0),
+                        getattr(usage, "completion_tokens", 0),
+                    )
+                ]
+            t = time.time()
+            account = os.environ.get("AGENT_ACCOUNT") or None
+            caller = _caller_name()
+            data = "".join(
+                json.dumps(
+                    {
+                        "t": t,
+                        "model": name,
+                        "input": int(inp or 0),
+                        "cache_write": int(cw or 0),
+                        "cache_read": int(cr or 0),
+                        "output": int(out or 0),
+                        "account": account,
+                        "caller": caller,
+                    }
+                )
+                + "\n"
+                for name, inp, cw, cr, out in rows
+            ).encode()
             with self._lock:
-                os.write(self._open(directory), (line + "\n").encode())
+                os.write(self._open(directory), data)
         except Exception:  # noqa: BLE001 — a usage record must never fail the call
             if not self._warned:
                 self._warned = True
@@ -1207,7 +1238,11 @@ class ClaudeCliLLM(CustomLLM):
                 pass
 
         result = _build_response(raw)
-        _usage_log.record(bare_model, result.usage)  # type: ignore[attr-defined]
+        _usage_log.record(
+            bare_model,
+            result.usage,  # type: ignore[attr-defined]
+            result.choices[0].message.provider_specific_fields.get("model_usage"),  # type: ignore[union-attr]
+        )
 
         # If litellm passed a pre-made ModelResponse, populate it in-place.
         if pre_made_response is not None:

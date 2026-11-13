@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+### Usage records are per model
+
+A call now writes one usage line per `modelUsage` entry, with `model` set to that entry's
+resolved id (e.g. `claude-haiku-5-5`) and that model's own counts. Counts are no longer
+summed across models. Only a result without `modelUsage` falls back to a single line
+naming the requested model. The keys are unchanged.
+
 ## 0.6.0
 
 ### Per-call usage records

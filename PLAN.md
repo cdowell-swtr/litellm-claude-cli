@@ -9,6 +9,7 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 _(nothing queued)_
 
 ## Done
+- [x] LCC10 — Usage records per model: one line per `modelUsage` entry under its resolved id, requested model only as fallback (v0.6.1) → log:#0020
 - [x] LCC9 — Per-call usage records: one JSONL line per completed call to `LITELLM_CLAUDE_CLI_USAGE_DIR`, `account` from `AGENT_ACCOUNT` (v0.6.0) → log:#0019
 - [x] LCC8 — Browser+exclusive with an MCP permission-prompt approver: `--chrome` under an allowlist, fail-closed `system/init` checks, streamed result parsing (v0.5.0) → log:#0015
 - [x] LCC7 — Exclusive allowlist mode + usage summed across `modelUsage`, raw dict exposed (v0.4.0) → log:#0014

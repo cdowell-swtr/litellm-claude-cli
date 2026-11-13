@@ -218,18 +218,20 @@ caller on that path has no way to detect a truncated `tool_use` turn; use
 
 ## Usage records
 
-Set `LITELLM_CLAUDE_CLI_USAGE_DIR` and every completed call appends one JSON line to a
-file in that directory — one `<start-ns>-<pid>.jsonl` file per process, created on the
+Set `LITELLM_CLAUDE_CLI_USAGE_DIR` and every completed call appends JSON lines — one per
+model it drove — to a file in that directory — one `<start-ns>-<pid>.jsonl` file per process, created on the
 first call:
 
 ```json
-{"t": 1794597511.23, "model": "haiku", "input": 2, "cache_write": 31468, "cache_read": 0, "output": 59, "account": "claude/acme", "caller": "my_tool"}
+{"t": 1794597702.94, "model": "claude-haiku-5-5", "input": 2, "cache_write": 15592, "cache_read": 15876, "output": 4, "account": "claude/acme", "caller": "my_tool"}
 ```
 
 - `t` — epoch seconds when the call finished.
-- `model` — the model the call asked for, provider prefix stripped (`claude-cli/haiku` → `haiku`).
-- `input`, `cache_write`, `cache_read`, `output` — the same counts as the response's `Usage`
-  (summed across `modelUsage`), `0` when unreported.
+- `model` — the resolved model id, one line per `modelUsage` entry (a call whose web tool
+  ran on a second model writes two lines). Without `modelUsage`, a single line names the
+  requested model, provider prefix stripped (`claude-cli/haiku` → `haiku`).
+- `input`, `cache_write`, `cache_read`, `output` — that model's own counts, never summed across
+  models; `0` when unreported. `t`, `account` and `caller` are the same on every line of a call.
 - `account` — `AGENT_ACCOUNT` when set and non-empty, else `null`.
 - `caller` — the calling program: its `-m` module name, else the basename of `sys.argv[0]`,
   else `null`.
