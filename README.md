@@ -216,6 +216,28 @@ populates a `tool_calls` array, so `tool_use` always maps to `finish_reason:
 caller on that path has no way to detect a truncated `tool_use` turn; use
 `litellm.completion()` if you need to.
 
+## Setting sources
+
+By default `claude -p` loads every settings source it finds: the account home's user
+settings (and the hooks they define), and the working directory's `.claude/` settings.
+Those were written for interactive sessions. To keep them out of a call, pass
+`setting_sources` to `ClaudeCliLLM`; it is emitted as `--setting-sources <names joined by ",">`:
+
+```python
+from litellm_claude_cli import Capabilities, ClaudeCliLLM
+
+llm = ClaudeCliLLM(capabilities=Capabilities(exclusive=True), setting_sources=())
+```
+
+- `()` loads no source: no user settings or hooks, no project or local settings, and no
+  `CLAUDE.md` from the working directory. Sign-in still works.
+- Otherwise each name is one of `SETTING_SOURCES` (`"user"`, `"project"`, `"local"`), in the
+  order given. `("project",)` keeps the working directory's settings and `CLAUDE.md`.
+- `None`, the default, emits no flag, so every source loads.
+
+A bare string or an unknown name raises `ValueError` at construction. The option applies in
+every capability mode.
+
 ## Usage records
 
 Set `LITELLM_CLAUDE_CLI_USAGE_DIR` and every completed call appends JSON lines — one per
@@ -247,7 +269,8 @@ Each call shells out to `claude -p` with `--disable-slash-commands`, plus either
 ## Public API
 
 - `USAGE_DIR_ENV` — the name of the usage-records environment variable, `LITELLM_CLAUDE_CLI_USAGE_DIR`; see [Usage records](#usage-records)
-- `ClaudeCliLLM` — the `CustomLLM` subclass; accepts optional `runner`/`stream_runner` (for testing) and `capabilities` arguments
+- `ClaudeCliLLM` — the `CustomLLM` subclass; accepts optional `runner`/`stream_runner` (for testing), `capabilities`, `timeout` and `setting_sources` arguments
+- `SETTING_SOURCES` — the names `setting_sources` accepts: `user`, `project`, `local`; see [Setting sources](#setting-sources)
 - `Capabilities` — `tools`/`browser`/`exclusive`/`mcp_servers`/`permission_prompt_tool` grants for a `ClaudeCliLLM` instance; see [Capabilities](#capabilities) above
 - `McpServer` — one MCP server (`name`, `command`, `args`) for `Capabilities.mcp_servers`, valid only in browser+exclusive mode
 - `CLAUDE_IN_CHROME_TOOLS` — the pinned 22-name `mcp__claude-in-chrome__*` inventory `tools` is validated against in browser+exclusive mode

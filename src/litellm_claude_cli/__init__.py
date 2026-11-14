@@ -40,7 +40,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -265,6 +265,37 @@ _MAX_ARG_STRLEN = 131072
 # callers whose harness grants a longer lease pass their own `timeout=` at
 # construction instead of living with this one.
 DEFAULT_TIMEOUT = 600.0
+
+# The names `--setting-sources` accepts, per the CLI's own help (2.1.325).
+SETTING_SOURCES: tuple[str, ...] = ("user", "project", "local")
+
+
+def _validate_setting_sources(
+    sources: Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Copy *sources* to a tuple, or raise ``ValueError`` on a bad entry.
+
+    A bare ``str`` is rejected outright: it is a sequence of characters, so
+    ``"user"`` would otherwise be read as four one-letter names.
+    """
+    if sources is None:
+        return None
+    if isinstance(sources, str):
+        raise ValueError(
+            "setting_sources must be a sequence of names, not a str; "
+            f"got {sources!r}. Pass e.g. ({sources!r},)."
+        )
+    copied = tuple(sources)
+    unknown = tuple(s for s in copied if s not in SETTING_SOURCES)
+    if unknown:
+        raise ValueError(
+            "unknown setting source(s): "
+            + ", ".join(repr(u) for u in unknown)
+            + ". Valid names, matched exactly: "
+            + ", ".join(SETTING_SOURCES)
+            + "."
+        )
+    return copied
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1138,16 @@ class ClaudeCliLLM(CustomLLM):
         the actuator itself rather than just the call to it, point this at
         the real runner with a fake CLI script and assert the process (and
         any child it spawned) is actually dead afterward.
+    setting_sources:
+        Which settings files the CLI loads, passed as
+        ``--setting-sources <sources joined by ",">`` in the caller's order.
+        Each entry is one of :data:`SETTING_SOURCES`.  ``()`` loads none: the
+        account home's user settings and their hooks stay out, as do the
+        working directory's ``.claude/`` settings and ``CLAUDE.md``, and
+        sign-in still works.  ``None`` (the default) emits no flag, so the
+        CLI loads every source, as before.  Applies in every capability mode.
+        A bare string or an unknown name raises ``ValueError`` at
+        construction.
     """
 
     def __init__(
@@ -1115,6 +1156,7 @@ class ClaudeCliLLM(CustomLLM):
         capabilities: Capabilities | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         stream_runner: _StreamRunner = _default_stream_runner,
+        setting_sources: Sequence[str] | None = None,
     ) -> None:
         super().__init__()
         if (
@@ -1129,6 +1171,7 @@ class ClaudeCliLLM(CustomLLM):
         self._capabilities = capabilities
         self._timeout = float(timeout)
         self._stream_runner = stream_runner
+        self._setting_sources = _validate_setting_sources(setting_sources)
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -1200,6 +1243,8 @@ class ClaudeCliLLM(CustomLLM):
             else:
                 argv += ["--output-format", "json"]
             argv += ["--model", bare_model]
+            if self._setting_sources is not None:
+                argv += ["--setting-sources", ",".join(self._setting_sources)]
             if schema_arg is not None:
                 argv += ["--json-schema", schema_arg]
             # The capability block: everything governing what this call may

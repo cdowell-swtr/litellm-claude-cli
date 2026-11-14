@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+### Setting sources
+
+`ClaudeCliLLM(setting_sources=...)` passes `--setting-sources` to `claude -p`. `()` loads
+no settings source, which keeps the account home's user settings and hooks, and the working
+directory's settings and `CLAUDE.md`, out of the call. Names are `user`, `project` and
+`local`, in the caller's order. The default, `None`, emits no flag, so behaviour is
+unchanged. New public constant `SETTING_SOURCES`. See the README's *Setting sources*.
+
 ## 0.6.1
 
 ### Usage records are per model
