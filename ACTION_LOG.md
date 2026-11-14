@@ -529,3 +529,23 @@ So `()` isolates whatever the working directory is.
 exclusive, list copied, unknown names, bare string. Full suite: 155 passed, 6 skipped. ruff
 clean, mypy at the 22-error baseline. Live through the provider with `Capabilities(exclusive=True)`
 from this repo: default 16,721 input tokens, `setting_sources=()` 13,358, both answered.
+
+#### #0022 · completed · LCC12 · 2026-11-14
+v0.8.0, a second request from chiplog's orchestrator. A provider call made on the host is
+counted twice: once by its usage record, and again by the transcript `claude -p` saves under
+the account home, which chiplog's collector ingests. Its daily-fit reviewer is the first caller
+on the host.
+
+**What changed.** `ClaudeCliLLM` takes `session_persistence: bool = True`. `False` appends
+`--no-session-persistence` after any `--setting-sources`, in every capability mode. A non-`bool`
+raises `ValueError` at construction. The default emits nothing.
+
+**Shape.** chiplog offered a fallback: `session_id` and `total_cost_usd` in each usage record, so
+an ingest could drop the matching transcript. I didn't build it, because chiplog said either fix
+was enough and the flag is what its reviewer would use.
+
+**Verification.** 7 tests in `tests/test_session_persistence.py`. Full suite: 162 passed,
+6 skipped. ruff clean, mypy at the 22-error baseline. Live on CLI 2.1.325: a bare `claude -p`
+wrote `<session_id>.jsonl` under the home's `projects/`, and the same call with the flag wrote
+none. Through the provider with `Capabilities(exclusive=True), setting_sources=(),
+session_persistence=False`: answered, no transcript, one usage line.

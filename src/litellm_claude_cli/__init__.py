@@ -1148,6 +1148,12 @@ class ClaudeCliLLM(CustomLLM):
         CLI loads every source, as before.  Applies in every capability mode.
         A bare string or an unknown name raises ``ValueError`` at
         construction.
+    session_persistence:
+        ``False`` emits ``--no-session-persistence``: the CLI writes no
+        transcript under the account home, so the call's usage record (see
+        :data:`USAGE_DIR_ENV`) is its only trace on disk.  ``True`` (the
+        default) emits nothing, as before.  Anything but a ``bool`` raises
+        ``ValueError`` at construction.
     """
 
     def __init__(
@@ -1157,6 +1163,7 @@ class ClaudeCliLLM(CustomLLM):
         timeout: float = DEFAULT_TIMEOUT,
         stream_runner: _StreamRunner = _default_stream_runner,
         setting_sources: Sequence[str] | None = None,
+        session_persistence: bool = True,
     ) -> None:
         super().__init__()
         if (
@@ -1172,6 +1179,11 @@ class ClaudeCliLLM(CustomLLM):
         self._timeout = float(timeout)
         self._stream_runner = stream_runner
         self._setting_sources = _validate_setting_sources(setting_sources)
+        if not isinstance(session_persistence, bool):
+            raise ValueError(
+                f"session_persistence must be a bool, got {session_persistence!r}"
+            )
+        self._session_persistence = session_persistence
 
     # Both overrides use *args/**kwargs because callers (litellm internals AND
     # our direct unit tests) pass very different subsets of the base signature.
@@ -1245,6 +1257,8 @@ class ClaudeCliLLM(CustomLLM):
             argv += ["--model", bare_model]
             if self._setting_sources is not None:
                 argv += ["--setting-sources", ",".join(self._setting_sources)]
+            if not self._session_persistence:
+                argv.append("--no-session-persistence")
             if schema_arg is not None:
                 argv += ["--json-schema", schema_arg]
             # The capability block: everything governing what this call may

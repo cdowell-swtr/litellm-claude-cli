@@ -9,6 +9,7 @@ repo's prefix `LCC` (see the PI implementer registry). Per `pi-convention.md`.
 _(nothing queued)_
 
 ## Done
+- [x] LCC12 — Session persistence: `session_persistence=False` on `ClaudeCliLLM` emits `--no-session-persistence` (v0.8.0) → log:#0022
 - [x] LCC11 — Setting sources: `setting_sources=` on `ClaudeCliLLM`, emitted as `--setting-sources`; `()` loads none (v0.7.0) → log:#0021
 - [x] LCC10 — Usage records per model: one line per `modelUsage` entry under its resolved id, requested model only as fallback (v0.6.1) → log:#0020
 - [x] LCC9 — Per-call usage records: one JSONL line per completed call to `LITELLM_CLAUDE_CLI_USAGE_DIR`, `account` from `AGENT_ACCOUNT` (v0.6.0) → log:#0019

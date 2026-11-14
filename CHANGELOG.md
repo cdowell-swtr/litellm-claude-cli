@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+### Session persistence
+
+`ClaudeCliLLM(session_persistence=False)` passes `--no-session-persistence` to `claude -p`,
+so a call writes no transcript under the account home and its usage record is its only
+trace on disk. The default, `True`, emits no flag, so behaviour is unchanged. See the
+README's *Session persistence*.
+
 ## 0.7.0
 
 ### Setting sources
