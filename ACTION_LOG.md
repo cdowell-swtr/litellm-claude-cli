@@ -508,3 +508,24 @@ by a two-model test (two lines, resolved ids, separate counts, shared t/account/
 A new test covers the fallback (one line, requested model). The unset-directory test is
 unchanged. Full suite: 146 passed, 6 skipped. ruff clean, mypy at the 22-error baseline.
 Live: one haiku call wrote one line with `model` `claude-haiku-5-5`.
+
+#### #0021 · completed · LCC11 · 2026-11-14
+v0.7.0, a request from chiplog's orchestrator. Its unattended reviewer call must not get the
+account home's user settings or SessionStart hooks, which are written for interactive sessions.
+
+**What changed.** `ClaudeCliLLM` takes `setting_sources: Sequence[str] | None = None`. A
+non-`None` value is emitted as `--setting-sources <names joined by ",">` after `--model`, in
+every capability mode. Names are validated against the new public `SETTING_SOURCES`
+(`user`, `project`, `local`) at construction; a bare `str` raises rather than being read as
+characters. `None` emits nothing, so existing callers are unchanged.
+
+**Shape.** The option is on `ClaudeCliLLM`, not `Capabilities`. `Capabilities` validates tool
+grants per mode, and setting sources apply the same way in every mode. No `cwd` option. Measured
+against CLI 2.1.325: `--setting-sources ""` is accepted and loads no source, sign-in intact. Run
+from this repo, `""` also drops the cwd's `CLAUDE.md`, which `project` loads (about 1.9k tokens).
+So `()` isolates whatever the working directory is.
+
+**Verification.** 9 tests in `tests/test_setting_sources.py`: absent, empty, order, with
+exclusive, list copied, unknown names, bare string. Full suite: 155 passed, 6 skipped. ruff
+clean, mypy at the 22-error baseline. Live through the provider with `Capabilities(exclusive=True)`
+from this repo: default 16,721 input tokens, `setting_sources=()` 13,358, both answered.
